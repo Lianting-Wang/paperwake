@@ -16,7 +16,7 @@
   },
   "shutdown": {
     "command": "/sbin/shutdown -h now",
-    "shutdown_even_if_alarm_set_failed": false
+    "shutdown_even_if_alarm_set_failed": true
   },
   "log_file": "/var/log/pisched/pisched.log"
 }

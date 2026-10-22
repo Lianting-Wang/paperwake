@@ -6,10 +6,12 @@
 
 | 文件 | 用途 | 时间表 | 闹钟失败时关机 |
 | --- | --- | --- | --- |
-| `config/daytime.example.json` | 日常运行示例，待自行调整 | 08:00、12:00、16:00、18:00 | 否 |
-| `config/test-half-hour.json` | 加速测试 | 全天每半小时一次 | 否 |
+| `config/daytime.example.json` | 日常运行示例，待自行调整 | 08:00、12:00、16:00、18:00 | 是 |
+| `config/test-half-hour.json` | 加速测试 | 全天每半小时一次 | 是 |
 
-两个模板的 `shutdown_even_if_alarm_set_failed` 均为 `false`，未成功安排唤醒时保持开机。模板只有部署后才会改变设备运行设置。
+两个模板的 `shutdown_even_if_alarm_set_failed` 均为 `true`，面向电池供电，允许未成功安排唤醒时仍请求关机。DEBUG 是显式维护例外。模板只有部署后才会改变设备运行设置。
+
+失败时应在限定次数与总时限内尝试通知，耗尽预算后仍关机，见 [失败处理约定](failure-handling.md)。通知流程和统一收尾尚未实现；当前这一字段只控制最后的闹钟失败分支，不能保证早期退出或阻塞后也会关机。
 
 选择后复制为 `config/local.json`，修改 `schedule` 即可。该文件被 Git 忽略，不会意外成为团队默认值；需要共享的新方案应另存为命名清楚的模板。
 
@@ -24,7 +26,7 @@
 | `task.command` | 默认 `/usr/local/bin/my_test_task.sh`，通过 `shlex.split` 启动 |
 | `task.timeout_sec` | 当前 120 秒；实现存在阻塞读取问题，见已知问题 |
 | `shutdown.command` | 当前 `/sbin/shutdown -h now` |
-| `shutdown.shutdown_even_if_alarm_set_failed` | 闹钟设置失败后是否仍关机；模板为 `false` |
+| `shutdown.shutdown_even_if_alarm_set_failed` | 闹钟设置失败后是否仍请求关机；电池运行模板为 `true` |
 | `log_file` | `/var/log/pisched/pisched.log` |
 
 时区来自树莓派系统，JSON 中没有时区字段。检查命令为 `ssh pi timedatectl`。设备当前为 `America/New_York`，夏令时切换的真实 RTC 唤醒还需硬件验证。

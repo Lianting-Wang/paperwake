@@ -29,7 +29,7 @@
 - `pisched.service` 是开机执行一次的 oneshot 服务。周期刷新依靠 PiSugar 唤醒，不是常驻循环；DEBUG 模式下不会自行按时间表刷新。
 - 半小时配置用于测试。日常配置中的 08:00、12:00、16:00、18:00 只是示例，不能当作已确定的正式安排。
 - 时间表使用设备本地时区，当前为 `America/New_York`；维护工具只接受每日计划 `repeat_mask=127`。
-- 配置模板的 `shutdown_even_if_alarm_set_failed` 保持 `false`，除非任务明确要求调整这一策略。
+- 面向电池供电，配置模板的 `shutdown_even_if_alarm_set_failed` 保持 `true`。正常运行中失败应先记录并在次数和总时限内尝试通知，耗尽预算后仍请求系统安全关机；通知失败不能阻止关机。通知接口及未来电子纸错误状态见 [失败处理约定](docs/failure-handling.md)，当前尚未实现该通知流程。
 - 当前显示目标为 1872×1404、VCOM −1.56 V、显示模式 1。改屏幕型号或参数前先核对硬件。
 - 任务和打包脚本使用 `/home/wlt/IT8951/epd`。调整部署路径、网络目标、接口或 socket 时，检查源码、配置、打包工具与文档中的所有使用处。
 
@@ -61,7 +61,7 @@ make release CONFIG=config/local.json
 
 直接运行调度器或启动 `pisched.service` 会采集数据、刷新屏幕、修改 RTC，并可能关机。DEBUG 只跳过最后的关机，不会阻止其他设备操作。不要将这些命令用于无副作用的检查。
 
-在 RTC 或唤醒异常尚未解决时保持 DEBUG。部署、恢复及有人值守的唤醒验证按 [设备维护流程](docs/maintenance.md) 执行。应用发布不自动覆盖启动配置或 PiSugar 包管理的 unit。
+当前有人值守的 RTC 排查保留 DEBUG；DEBUG 是显式维护例外，不是电池运行的失败保护。正常电池运行按失败处理约定在预算内收尾并关机，即使下次唤醒无法保证。部署、恢复及有人值守的唤醒验证按 [设备维护流程](docs/maintenance.md) 执行。应用发布不自动覆盖启动配置或 PiSugar 包管理的 unit。
 
 ## 完成任务
 

@@ -59,7 +59,7 @@ make release CONFIG=config/local.json
 
 ## 安装到设备
 
-当前设备有 RTC 异常，部署验证期间保留 DEBUG。
+当前设备有 RTC 异常，有人值守的部署验证期间保留 DEBUG。正常电池运行允许失败后关机，通知重试耗尽后也应关机；DEBUG 是维护例外，不能作为日常电池运行的故障策略，详见 [失败处理约定](failure-handling.md)。本次策略更新不自动修改设备或移除其 DEBUG。
 
 需要设备备份时先使用 snapshot，再将选定发布目录复制到设备的临时目录，例如 `/home/wlt/epaper-release/`。核对 `release.json` 和其中 `rootfs/etc/pisched/config.json` 的内容。然后在树莓派上，从发布目录执行：
 
