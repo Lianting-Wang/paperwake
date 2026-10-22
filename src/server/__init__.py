@@ -20,6 +20,41 @@ DEFAULT_DISPLAY = {'title': 'E-PAPER', 'status': 'Ready', 'rows': [
 IDENTIFIER = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$')
 
 
+UI_LABELS = {
+    'check-in': '设备报到', 'final': '最终报告', 'outcome': '补充结果',
+    'hold': '保持开机', 'poweroff': '准备关机',
+    'task': '采集任务', 'display': '屏幕刷新', 'pisugar': '电源管理',
+    'time': '时钟同步', 'alarm': '唤醒闹钟', 'battery': '电量',
+    'server_check_in': '服务器连接', 'server_report': '报告上传',
+    'notification': '异常通知', 'outbox': '报告队列', 'shutdown': '关机',
+    'state': '状态保存', 'failure_display': '异常画面', 'cycle': '运行周期',
+    'ok': '成功', 'success': '成功', 'failed': '失败', 'skipped': '已跳过',
+    'pending': '等待处理', 'requesting': '正在请求', 'requested': '已请求',
+    'debug': '调试留机',
+}
+HTTP_ERRORS = {
+    400: ('请求无效', '请检查填写的内容或链接，然后重试。'),
+    401: ('需要身份验证', '请登录后重试。'),
+    403: ('无权访问', '当前账号没有访问此页面的权限。'),
+    404: ('页面不存在', '未找到此页面或设备，请返回概览。'),
+    405: ('不支持此操作', '请通过页面中的按钮提交操作。'),
+    413: ('提交内容过大', '请减少提交内容后重试。'),
+    500: ('服务器错误', '服务暂时无法处理请求，请稍后重试。'),
+}
+
+
+def ui_label(value):
+    return UI_LABELS.get(value, value) if isinstance(value, str) else '未知'
+
+
+def display_result_label(payload):
+    value = payload.get('display', {}).get('status', payload.get('display_result',
+        payload.get('task', {}).get('status', payload.get('metrics', {}).get('display_returncode'))))
+    if type(value) is int:
+        return '成功' if value == 0 else f'失败（退出码 {value}）'
+    return ui_label(value)
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
@@ -37,23 +72,23 @@ def timestamp(value):
 
 def validate_display(value):
     if not isinstance(value, dict) or set(value) != {'title', 'status', 'rows'}:
-        raise ValueError('Display must contain title, status and rows.')
+        raise ValueError('屏幕内容必须包含标题、状态和信息行。')
     def text(key, raw, limit, allow_empty=False):
         if not isinstance(raw, str) or len(raw) > limit or (not raw and not allow_empty):
-            raise ValueError(f'{key} must contain {1 if not allow_empty else 0}–{limit} characters.')
+            raise ValueError(f'{key}须包含 {1 if not allow_empty else 0}–{limit} 个字符。')
         if any(ord(char) < 32 or ord(char) > 126 for char in raw):
-            raise ValueError(f'{key} accepts printable ASCII characters only.')
+            raise ValueError(f'{key}仅支持英文、数字和可打印 ASCII 符号。')
         return raw
     rows = value['rows']
     if not isinstance(rows, list) or len(rows) > 6:
-        raise ValueError('Use at most six display rows.')
-    result = {'title': text('Title', value['title'], 40),
-              'status': text('Status', value['status'], 24), 'rows': []}
+        raise ValueError('最多可设置六条显示信息。')
+    result = {'title': text('标题', value['title'], 40),
+              'status': text('状态', value['status'], 24), 'rows': []}
     for row in rows:
         if not isinstance(row, dict) or set(row) != {'label', 'value'}:
-            raise ValueError('Each display row needs a label and value.')
-        result['rows'].append({'label': text('Label', row['label'], 20),
-                               'value': text('Value', row['value'], 48, True)})
+            raise ValueError('每条显示信息都需要名称和内容。')
+        result['rows'].append({'label': text('名称', row['label'], 20),
+                               'value': text('内容', row['value'], 48, True)})
     return result
 
 
@@ -72,6 +107,7 @@ def _database():
 
 def create_app(config=None):
     app = Flask(__name__)
+    app.jinja_env.filters.update(ui_label=ui_label, display_result_label=display_result_label)
     app.config.from_mapping(
         DATABASE=os.environ.get('DATABASE', 'data/runtime/server.sqlite3'),
         SECRET_KEY=os.environ.get('SECRET_KEY', ''),
@@ -149,7 +185,7 @@ def create_app(config=None):
             expected = session.get('csrf', '')
             supplied = request.form.get('csrf_token', '')
             if not expected or not hmac.compare_digest(expected.encode(), supplied.encode()):
-                abort(400, 'The form expired. Reload the page and try again.')
+                abort(400, '表单已失效，请刷新页面后重新提交。')
         # Clean on each request, even if a device never checks in again. The persistent
         # current state remains visible after its original history row has expired.
         db = get_db()
@@ -173,7 +209,11 @@ def create_app(config=None):
     def http_error(error):
         if request.path.startswith('/api/'):
             return jsonify(error=error.description), error.code
-        return render_template('error.html', error=error), error.code
+        title, description = HTTP_ERRORS.get(error.code, ('请求失败', '请稍后重试。'))
+        if error.description != type(error).description:
+            description = error.description
+        return render_template('error.html', error=error, error_title=title,
+                               error_description=description), error.code
 
     def login_required(fn):
         @wraps(fn)
@@ -294,7 +334,7 @@ def create_app(config=None):
                 session['admin'] = app.config['ADMIN_USERNAME']
                 session.permanent = True
                 return redirect(url_for('dashboard'))
-            flash('The username or password is incorrect.', 'error')
+            flash('用户名或密码不正确。', 'error')
             return render_template('login.html'), 401
         return render_template('login.html')
 
@@ -351,7 +391,7 @@ def create_app(config=None):
                 db.execute('UPDATE devices SET debug=?,display_json=?,content_version=content_version+? WHERE device_id=?',
                            (int(debug), json.dumps(display), int(changed), device_id))
                 db.commit()
-                flash('Saved. The device will use these settings on its next check-in.', 'success')
+                flash('设置已保存，将在设备下次报到时生效。', 'success')
                 return redirect(url_for('dashboard'))
         return render_template('settings.html', device=device, display=display, debug=debug, error=error), 400 if error else 200
 
@@ -392,21 +432,21 @@ def expected_next_run(payload):
 def health(device, now):
     payload = device['payload']
     if not device.get('last_seen_at'):
-        return 'unknown', 'Awaiting first check-in'
+        return 'unknown', '等待设备首次报到'
     shutdown = payload.get('shutdown', {})
     if payload.get('debug_hold') is True or shutdown.get('status') == 'debug':
-        return 'maintenance', 'Maintenance · staying awake'
+        return 'maintenance', '维护中 · 保持开机'
     if not device.get('latest_report_at'):
         if payload.get('local_debug') is True:
-            return 'maintenance', 'Maintenance · local debug'
+            return 'maintenance', '维护中 · 本地调试'
         contact = timestamp(device.get('last_seen_at'))
         if contact and now > contact + timedelta(minutes=10):
-            return 'fault', 'Cycle incomplete · no final report'
+            return 'fault', '周期未完成 · 未收到最终报告'
     expected = timestamp(expected_next_run(payload))
     if expected and now - expected > timedelta(minutes=10):
-        return 'missing', 'Missing check-in'
+        return 'missing', '设备失联 · 超过预计报到时间'
     if payload.get('failures') or payload.get('pending_failures'):
-        return 'fault', 'Device reported a fault'
+        return 'fault', '设备上报异常'
     if expected:
-        return 'healthy', 'Scheduled sleep'
-    return 'unknown', 'Next check-in time unknown'
+        return 'healthy', '计划休眠'
+    return 'unknown', '下次报到时间未知'

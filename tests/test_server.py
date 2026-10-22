@@ -185,7 +185,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.login().status_code, 302)
         response = self.client.get('/')
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Your screen, connected.', response.data)
+        self.assertIn('电子纸设备管理'.encode(), response.data)
         self.assertEqual(self.check_in().status_code, 200)
         self.assertEqual(self.post('check-in', {'device_id': 'test-screen', 'event_id': 'boot', 'started_at': self.now.isoformat()}, {}).status_code, 401)
         self.assertEqual(self.client.post('/logout').status_code, 400)
@@ -275,7 +275,7 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b'71%', response.data)
         self.assertIn(b'-48 dBm', response.data)
         self.assertNotIn(b'<script>bad</script>', response.data)
-        self.assertIn(b'actual power-off is not confirmed', response.data)
+        self.assertIn('尚未确认实际断电'.encode(), response.data)
         history = self.client.get('/devices/test-screen/history')
         self.assertEqual(history.status_code, 200)
         self.assertIn(b'boot-1', history.data)
@@ -314,7 +314,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn(b'7.3 ms', dashboard.data)
         self.assertIn(b'83.4%', dashboard.data)
-        self.assertIn(b'<dt>Display result</dt><dd>ok</dd>', dashboard.data)
+        self.assertIn('<dt>屏幕刷新</dt><dd>成功</dd>'.encode(), dashboard.data)
 
     def test_display_result_falls_back_to_metrics_returncode(self):
         self.check_in()
@@ -322,7 +322,7 @@ class ServerTests(unittest.TestCase):
         self.login()
         dashboard = self.client.get('/')
         self.assertEqual(dashboard.status_code, 200)
-        self.assertIn(b'<dt>Display result</dt><dd>0</dd>', dashboard.data)
+        self.assertIn('<dt>屏幕刷新</dt><dd>成功</dd>'.encode(), dashboard.data)
 
     def test_missing_metrics_use_dash_without_units_and_battery_falls_back(self):
         self.check_in('missing-metrics')
@@ -330,15 +330,15 @@ class ServerTests(unittest.TestCase):
         self.login()
         dashboard = self.client.get('/')
         self.assertEqual(dashboard.status_code, 200)
-        self.assertIn('<dt>Battery</dt><dd>—</dd>'.encode(), dashboard.data)
-        self.assertIn('<dt>Wi-Fi signal</dt><dd>—</dd>'.encode(), dashboard.data)
+        self.assertIn('<dt>电量</dt><dd>—</dd>'.encode(), dashboard.data)
+        self.assertIn('<dt>Wi-Fi 信号</dt><dd>—</dd>'.encode(), dashboard.data)
         self.assertNotIn(b'None', dashboard.data)
         self.check_in('fallback-battery')
         self.report('fallback-battery', battery_percent=0,
                     metrics={'values': {'battery_percent': None, 'wifi_rssi': 0}})
         dashboard = self.client.get('/')
-        self.assertIn(b'<dt>Battery</dt><dd>0%</dd>', dashboard.data)
-        self.assertIn(b'<dt>Wi-Fi signal</dt><dd>0 dBm</dd>', dashboard.data)
+        self.assertIn('<dt>电量</dt><dd>0%</dd>'.encode(), dashboard.data)
+        self.assertIn('<dt>Wi-Fi 信号</dt><dd>0 dBm</dd>'.encode(), dashboard.data)
 
     def test_extreme_future_wakeup_cannot_overflow_dashboard(self):
         self.check_in()
