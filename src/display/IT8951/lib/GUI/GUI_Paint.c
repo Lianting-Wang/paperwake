@@ -175,7 +175,7 @@ parameter:
 ******************************************************************************/
 void Paint_SetPixel(UWORD Xpoint, UWORD Ypoint, UWORD Color)
 {
-    if(Xpoint > Paint.Width || Ypoint > Paint.Height){
+    if(Xpoint >= Paint.Width || Ypoint >= Paint.Height){
         //Debug("Exceeding display boundaries\r\n");
         return;
     }      
@@ -219,7 +219,7 @@ void Paint_SetPixel(UWORD Xpoint, UWORD Ypoint, UWORD Color)
         return;
     }
 
-    if(X > Paint.WidthMemory || Y > Paint.HeightMemory){
+    if(X >= Paint.WidthMemory || Y >= Paint.HeightMemory){
         Debug("Exceeding display boundaries\r\n");
         return;
     }
@@ -292,7 +292,15 @@ parameter:
 void Paint_Clear(UWORD Color)
 {
     UDOUBLE ImageSize = Paint.WidthByte * Paint.HeightByte;
-    memset(Paint.Image, Color,  ImageSize);
+    UBYTE fill = Color & 0xFF;
+    if(Paint.BitsPerPixel < 8) {
+        UBYTE pixel = (Color & 0xFF) >> (8 - Paint.BitsPerPixel);
+        fill = 0;
+        for(unsigned shift = 0; shift < 8; shift += Paint.BitsPerPixel) {
+            fill |= pixel << shift;
+        }
+    }
+    memset(Paint.Image, fill, ImageSize);
 }
 
 /******************************************************************************
@@ -325,7 +333,7 @@ parameter:
 void Paint_DrawPoint(UWORD Xpoint, UWORD Ypoint, UWORD Color,
                      DOT_PIXEL Dot_Pixel, DOT_STYLE Dot_Style)
 {
-    if (Xpoint > Paint.Width || Ypoint > Paint.Height) {
+    if (Xpoint >= Paint.Width || Ypoint >= Paint.Height) {
         Debug("Paint_DrawPoint Input exceeds the normal display range\r\n");
         return;
     }
@@ -369,8 +377,8 @@ parameter:
 void Paint_DrawLine(UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD Yend,
                     UWORD Color, DOT_PIXEL Line_width, LINE_STYLE Line_Style)
 {
-    if (Xstart > Paint.Width || Ystart > Paint.Height ||
-        Xend > Paint.Width || Yend > Paint.Height) {
+    if (Xstart >= Paint.Width || Ystart >= Paint.Height ||
+        Xend >= Paint.Width || Yend >= Paint.Height) {
         Debug("Paint_DrawLine Input exceeds the normal display range\r\n");
         return;
     }
@@ -427,8 +435,8 @@ parameter:
 void Paint_DrawRectangle(UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD Yend,
                          UWORD Color, DOT_PIXEL Line_width, DRAW_FILL Draw_Fill)
 {
-    if (Xstart > Paint.Width || Ystart > Paint.Height ||
-        Xend > Paint.Width || Yend > Paint.Height) {
+    if (Xstart >= Paint.Width || Ystart >= Paint.Height ||
+        Xend >= Paint.Width || Yend >= Paint.Height) {
         Debug("Input exceeds the normal display range\r\n");
         return;
     }
@@ -531,12 +539,14 @@ void Paint_DrawChar(UWORD Xpoint, UWORD Ypoint, const char Acsii_Char,
 {
     UWORD Page, Column;
 
-    if (Xpoint > Paint.Width || Ypoint > Paint.Height) {
+    if (Xpoint >= Paint.Width || Ypoint >= Paint.Height) {
         Debug("Paint_DrawChar Input exceeds the normal display range\r\n");
         return;
     }
 
-    uint32_t Char_Offset = (Acsii_Char - ' ') * Font->Height * (Font->Width / 8 + (Font->Width % 8 ? 1 : 0));
+    unsigned char glyph = (unsigned char)Acsii_Char;
+    if(glyph < ' ' || glyph > '~') glyph = '?';
+    uint32_t Char_Offset = (glyph - ' ') * Font->Height * (Font->Width / 8 + (Font->Width % 8 ? 1 : 0));
     const unsigned char *ptr = &Font->table[Char_Offset];
 
     for (Page = 0; Page < Font->Height; Page ++ ) {
@@ -581,7 +591,7 @@ void Paint_DrawString_EN(UWORD Xstart, UWORD Ystart, const char * pString,
     UWORD Xpoint = Xstart;
     UWORD Ypoint = Ystart;
 
-    if (Xstart > Paint.Width || Ystart > Paint.Height) {
+    if (Xstart >= Paint.Width || Ystart >= Paint.Height) {
         Debug("Paint_DrawString_EN Input exceeds the normal display range\r\n");
         return;
     }
@@ -629,7 +639,7 @@ void Paint_DrawString_CN(UWORD Xstart, UWORD Ystart, const char * pString, cFONT
 
     /* Send the string character by character on EPD */
     while (*p_text != 0) {
-        if(*p_text <= 0x7F) {  //ASCII < 126
+        if((unsigned char)*p_text <= 0x7F) {  //ASCII < 126
             for(Num = 0; Num < font->size; Num++) {
                 if(*p_text== font->table[Num].index[0]) {
                     const char* ptr = &font->table[Num].matrix[0];
@@ -666,6 +676,7 @@ void Paint_DrawString_CN(UWORD Xstart, UWORD Ystart, const char * pString, cFONT
             /* Decrement the column position by 16 */
             x += font->ASCII_Width;
         } else {        //Chinese
+            if(p_text[1] == 0) break;
             for(Num = 0; Num < font->size; Num++) {
                 if((*p_text== font->table[Num].index[0]) && (*(p_text+1) == font->table[Num].index[1])) {
                     const char* ptr = &font->table[Num].matrix[0];
@@ -724,7 +735,7 @@ void Paint_DrawNum(UWORD Xpoint, UWORD Ypoint, int32_t Nummber,
     uint8_t Str_Array[ARRAY_LEN] = {0}, Num_Array[ARRAY_LEN] = {0};
     uint8_t *pStr = Str_Array;
 
-    if (Xpoint > Paint.Width || Ypoint > Paint.Height) {
+    if (Xpoint >= Paint.Width || Ypoint >= Paint.Height) {
         Debug("Paint_DisNum Input exceeds the normal display range\r\n");
         return;
     }

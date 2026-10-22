@@ -11,7 +11,7 @@ from project_config import ROOT, load_config
 
 
 def main():
-    for folder in ('scripts', 'src/scheduler', 'tests'):
+    for folder in ('scripts', 'src/scheduler', 'src/tasks', 'tests'):
         for path in (ROOT / folder).glob('*.py'):
             ast.parse(path.read_text(), filename=str(path))
     for path in sorted((ROOT / 'config').glob('*.json')):

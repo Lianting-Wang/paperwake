@@ -8,11 +8,12 @@
 flowchart TD
     A[PiSugar RTC 唤醒] --> B[树莓派开机]
     B --> C[启动 PiSugar 服务与 pisched]
-    C --> D[RTC 恢复系统时间]
-    D --> E[等待网络与 NTP 同步]
+    C --> D[有界等待 PiSugar，就绪后优先确认 NTP]
+    D --> E[写回并校验 RTC，或仅用可信 RTC 恢复]
     E --> F[执行采集和电子纸任务]
     F --> G[设置并校验下一次 RTC 闹钟]
-    G --> H{存在 DEBUG 标记}
+    G --> K[保存状态，失败时有界通知及可选错误展示]
+    K --> H{存在 DEBUG 标记}
     H -->|是| I[保持开机]
     H -->|否| J[系统关机与 PiSugar 电源处理]
     J --> A
@@ -22,26 +23,26 @@ flowchart TD
 
 任务执行结束后，调度器设置并校验下一次 RTC 闹钟。
 
-电池运行的目标是所有路径在预算内结束并请求关机，包括闹钟设置失败；失败先记录，并通过预留接口做有次数和总时限的通知。DEBUG 为显式维护例外。上述通知与统一收尾尚待实现，当前健康检查提前退出和任务阻塞还不能保证关机；详见 [失败处理约定](failure-handling.md)。
+电池运行的目标是所有路径在预算内结束并请求关机，包括闹钟设置失败；失败先记录，并通过预留接口做有次数和总时限的通知。DEBUG 为显式维护例外。统一收尾与通知接口已实现，systemd 对崩溃和总超时提供独立关机兜底；详见 [失败处理约定](failure-handling.md)。
 
 ## 文件映射
 
 | 仓库文件 | 树莓派位置 | 说明 |
 | --- | --- | --- |
 | `src/scheduler/pisched.py` | `/opt/pisched/pisched.py` | 调度主程序 |
-| `src/tasks/my_test_task.sh` | `/usr/local/bin/my_test_task.sh` | 指标采集和刷新任务 |
+| `src/tasks/collect_metrics.py` | `/opt/pisched/collect_metrics.py` | 指标采集和刷新任务 |
 | 选定的 `config/*.json` | `/etc/pisched/config.json` | 部署时明确选择 |
-| `deploy/systemd/pisched.service` | `/etc/systemd/system/pisched.service` | 保持设备现有服务定义 |
-| 构建的 `build/display/epd` | `/home/wlt/IT8951/epd` | 当前任务脚本写死此路径 |
+| `deploy/systemd/pisched.service` | `/etc/systemd/system/pisched.service` | 有限期限与失败关机兜底 |
+| 构建的 `build/display/epd` | `/home/wlt/IT8951/epd` | 默认安装路径，可配置 display.path |
 | `deploy/boot/config.pi-zero2.txt` | `/boot/firmware/config.txt` | Pi Zero 2 配置参考，不随发布包安装 |
 
 PiSugar 服务由系统安装包管理：`pisugar-server.service` 提供 Unix socket；`pisugar-poweroff.service` 在关机流程中运行 `/usr/bin/pisugar-poweroff`。本项目的发布包仅安装应用文件，PiSugar 的 unit 和参数通过系统包管理。
 
 ## 数据流
 
-任务脚本通过 `/tmp/pisugar-server.sock` 读取电量、电压、温度，通过 `iwconfig wlan0` 读取信号，向 `192.168.76.71` ping 20 次，然后追加 `/var/log/pisched/network_metrics.csv`。网络测试目标目前同时硬编码在 Python 调度器和 Shell 任务中。
+采集程序从调度器环境读取已校验配置，独立读取电量、电压、温度、Wi-Fi 和 ping；单项失败记为缺失值，仍写 CSV 和刷新页面。socket、网络目标、接口和显示路径都来自同一份配置。CSV 使用 UTC 带偏移时间，指标原子保存到 metrics_file。日志及 CSV 在应用内按 1 MiB、4 份备份轮换。
 
-电子纸程序独立查询 PiSugar 电量，并读取系统时间，不消费指标 CSV。`READY` 为固定文案，不能用作硬件或网络健康判断。
+电子纸程序通过 PISCHED_BATTERY 消费同一份电池样本；没有样本则显示 N/A。SNAPSHOT 为页面样本标签，不代表调度闭环成功。调度器将匹配本轮事件的指标、失败、通知和关机请求结果保存在 state_file，未来错误页面可通过 failure_display 接口读取。
 
 日志位置：
 

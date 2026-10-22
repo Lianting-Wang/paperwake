@@ -11,12 +11,26 @@
     "timeout_sec": 2
   },
   "task": {
-    "command": "/usr/local/bin/my_test_task.sh",
+    "command": "/usr/bin/python3 /opt/pisched/collect_metrics.py",
     "timeout_sec": 120
   },
   "shutdown": {
     "command": "/sbin/shutdown -h now",
     "shutdown_even_if_alarm_set_failed": true
   },
-  "log_file": "/var/log/pisched/pisched.log"
+  "log_file": "/var/log/pisched/pisched.log",
+  "timezone": "America/New_York",
+  "state_file": "/var/lib/pisched/state.json",
+  "metrics_file": "/var/lib/pisched/metrics.json",
+  "notification": {
+    "command": [],
+    "max_attempts": 3,
+    "timeout_sec": 5,
+    "total_timeout_sec": 20,
+    "backoff_sec": 1
+  },
+  "failure_display": {
+    "command": [],
+    "timeout_sec": 10
+  }
 }

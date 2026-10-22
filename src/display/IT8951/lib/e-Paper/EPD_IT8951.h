@@ -182,6 +182,9 @@ void EPD_IT8951_Display_AreaBuf(UWORD X,UWORD Y,UWORD W,UWORD H,UWORD Mode, UDOU
 void EPD_IT8951_Display_1bp(UWORD X, UWORD Y, UWORD W, UWORD H, UWORD Mode,UDOUBLE Target_Memory_Addr, UBYTE Front_Gray_Val, UBYTE Back_Gray_Val);
 */
 
+void EPD_IT8951_Cancel(void);
+bool EPD_IT8951_HasError(void);
+
 void Enhance_Driving_Capability(void);
 
 void EPD_IT8951_SystemRun(void);

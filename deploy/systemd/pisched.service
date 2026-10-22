@@ -1,11 +1,16 @@
 [Unit]
-Description=PiSugar scheduler (run task, set next RTC alarm, shutdown)
-After=network-online.target
-Wants=network-online.target
+Description=Battery e-paper refresh cycle with bounded failure handling
+Wants=network.target pisugar-server.service
+After=network.target pisugar-server.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 /opt/pisched/pisched.py /etc/pisched/config.json
+# Independent backstop for Python crashes, invalid configuration and blocked I/O.
+TimeoutStartSec=300
+TimeoutStopSec=10
+KillMode=control-group
+ExecStopPost=/bin/sh -c 'if [ "$$SERVICE_RESULT" != success ] && [ ! -e /boot/DEBUG ] && [ ! -e /boot/firmware/DEBUG ]; then /usr/bin/timeout --kill-after=1 6 /sbin/shutdown -h now; fi'
 
 [Install]
 WantedBy=multi-user.target

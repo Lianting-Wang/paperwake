@@ -6,11 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/un.h>
 #include <time.h>
-#include <unistd.h>
+#include <math.h>
 
 #define PAGE_WHITE      0xF0
 #define PAGE_BLACK      0x00
@@ -21,8 +18,6 @@
 #define CN_HELLO "\xC4\xE3\xBA\xC3"
 #define CN_RPI   "\xCA\xF7\xDD\xAE\xC5\xC9"
 
-#define PISUGAR_SOCKET_PATH "/tmp/pisugar-server.sock"
-#define PISUGAR_REQUEST     "get battery\n"
 
 extern UBYTE isColor;
 
@@ -55,64 +50,13 @@ static void FillBox(UWORD x0, UWORD y0, UWORD x1, UWORD y1, UWORD fill_color)
 
 static bool ReadBatteryValue(char *buffer, size_t buffer_size)
 {
-    int socket_fd;
-    struct sockaddr_un server_addr;
-    struct timeval timeout;
-    char response[128];
-    ssize_t read_size;
-    char *value_start;
-    char *value_end;
-
-    if(buffer == NULL || buffer_size == 0) {
-        return false;
-    }
-
-    socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if(socket_fd < 0) {
-        return false;
-    }
-
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
-    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sun_family = AF_UNIX;
-    strncpy(server_addr.sun_path, PISUGAR_SOCKET_PATH, sizeof(server_addr.sun_path) - 1);
-
-    if(connect(socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0) {
-        close(socket_fd);
-        return false;
-    }
-
-    if(write(socket_fd, PISUGAR_REQUEST, sizeof(PISUGAR_REQUEST) - 1) < 0) {
-        close(socket_fd);
-        return false;
-    }
-
-    read_size = read(socket_fd, response, sizeof(response) - 1);
-    close(socket_fd);
-    if(read_size <= 0) {
-        return false;
-    }
-
-    response[read_size] = '\0';
-    value_start = response;
-    while(*value_start != '\0' && ((*value_start < '0' || *value_start > '9') && *value_start != '.')) {
-        value_start++;
-    }
-    if(*value_start == '\0') {
-        return false;
-    }
-
-    value_end = value_start;
-    while((*value_end >= '0' && *value_end <= '9') || *value_end == '.') {
-        value_end++;
-    }
-    *value_end = '\0';
-
-    snprintf(buffer, buffer_size, "%s%%", value_start);
+    const char *value = getenv("PISCHED_BATTERY");
+    char *end;
+    double percent;
+    if(buffer == NULL || buffer_size == 0 || value == NULL || *value == 0) return false;
+    percent = strtod(value, &end);
+    if(*end != 0 || !isfinite(percent) || percent < 0 || percent > 100) return false;
+    snprintf(buffer, buffer_size, "%.1f%%", percent);
     return true;
 }
 
@@ -274,7 +218,7 @@ UBYTE SinglePage_Show(UWORD panel_width, UWORD panel_height, UDOUBLE target_memo
     Paint_DrawString_EN(text_x, text_y, "VCOM: -1.56V", &Font16, PAGE_BLACK, PAGE_WHITE);
     text_y += line_gap;
 
-    Paint_DrawString_EN(text_x, text_y, "STATUS: READY", &Font16, PAGE_BLACK, PAGE_WHITE);
+    Paint_DrawString_EN(text_x, text_y, "STATUS: SNAPSHOT", &Font16, PAGE_BLACK, PAGE_WHITE);
     text_y += line_gap + margin / 2;
 
     Paint_DrawString_CN(text_x, text_y, CN_HELLO, &Font24CN, PAGE_BLACK, PAGE_WHITE);
@@ -290,7 +234,7 @@ UBYTE SinglePage_Show(UWORD panel_width, UWORD panel_height, UDOUBLE target_memo
     DrawInfoCard(right_x, card_y, right_x + right_width - 1, card_y + card_height - 1, margin, "BATTERY", battery_value);
 
     card_y += card_height + card_gap;
-    DrawInfoCard(right_x, card_y, right_x + right_width - 1, card_y + card_height - 1, margin, "STATUS", "READY");
+    DrawInfoCard(right_x, card_y, right_x + right_width - 1, card_y + card_height - 1, margin, "STATUS", "SNAPSHOT");
 
     footer_y = panel_height - footer_height;
     Paint_DrawLine(margin, footer_y, render_width - margin, footer_y, PAGE_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
@@ -300,5 +244,5 @@ UBYTE SinglePage_Show(UWORD panel_width, UWORD panel_height, UDOUBLE target_memo
     EPD_IT8951_4bp_Refresh(frame_buffer, 0, 0, render_width, panel_height, false, target_memory_addr, false);
 
     free(frame_buffer);
-    return 0;
+    return EPD_IT8951_HasError() ? 1 : 0;
 }

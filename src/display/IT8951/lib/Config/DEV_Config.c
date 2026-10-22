@@ -219,7 +219,7 @@ UBYTE DEV_Module_Init(void)
 		Debug("bcm2835 init success !!! \r\n");
 	}
 
-	bcm2835_spi_begin();                                         //Start spi interface, set spi pin for the reuse function
+	if(!bcm2835_spi_begin()) { bcm2835_close(); return 1; }                                         //Start spi interface, set spi pin for the reuse function
 	bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);     //High first transmission
 	bcm2835_spi_setDataMode(BCM2835_SPI_MODE0);                  //spi mode 0
 	//bcm2835_spi_setClockDivider(BCM2835_SPI_CLOCK_DIVIDER_16);   //For RPi3/3B/3B+

@@ -19,10 +19,11 @@ import subprocess
 
 paths = [
     '/opt/pisched/pisched.py', '/etc/pisched/config.json',
-    '/usr/local/bin/my_test_task.sh', '/etc/systemd/system/pisched.service',
+    '/opt/pisched/collect_metrics.py', '/etc/systemd/system/pisched.service',
     '/boot/firmware/config.txt', '/usr/lib/systemd/system/pisugar-poweroff.service',
     '/etc/default/pisugar-poweroff', '/etc/os-release',
-    '/home/wlt/IT8951/epd',
+    '/home/wlt/IT8951/epd', '/var/lib/pisched/state.json', '/var/lib/pisched/metrics.json',
+    '/etc/systemd/system/pisugar-server.service.d/10-local-control.conf',
     '/var/log/pisched/network_metrics.csv', '/var/log/pisched/pisched.log',
     '/var/log/pisched/epd.log',
 ]
@@ -78,7 +79,7 @@ def main():
     if output.exists():
         parser.error(f'output already exists: {output}')
     result = subprocess.run(
-        ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', args.host, 'python3 -'],
+        ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', args.host, 'sudo -n python3 -'],
         input=REMOTE_SCRIPT, capture_output=True, text=True, timeout=180,
     )
     if result.returncode:

@@ -39,7 +39,7 @@ make snapshot HOST=pi
 - `rootfs/`：调度器、任务、配置、systemd unit、启动配置、显示源码及设备上的 `epd`、日志和 CSV。
 - `manifest.json`：每个文件的远端路径与 SHA-256，以及设备时间、系统、服务状态和启动统计。
 
-脚本只读取指定路径，不获取 `.ssh`、PiSugar Web 密码配置或其他账号数据。单个文件超过 8 MiB 会跳过并返回非零退出码；后续日志变大时应单独归档。该快照是项目级备份，不是整张 SD 卡镜像，也不包含网络凭据、全部系统包或系统还原能力。
+脚本通过 `sudo -n` 只读取指定路径（含 root 所有的状态文件），不获取 `.ssh`、PiSugar Web 密码配置或其他账号数据。单个文件超过 8 MiB 会跳过并返回非零退出码；后续日志变大时应单独归档。该快照是项目级备份，不是整张 SD 卡镜像，也不包含网络凭据、全部系统包或系统还原能力。
 
 快照目录被 Git 忽略；需要跨电脑使用的设备备份应另行复制。
 
@@ -53,9 +53,9 @@ make preview CONFIG=config/local.json
 make release CONFIG=config/local.json
 ```
 
-`prepare-release.py` 检查配置和 ARM64 ELF 标识，拒绝覆盖已有输出目录。发布包位于 `build/releases/UTC时间戳/`，包含 `rootfs/`、`release.json` 和 `INSTALL.txt`。构建产物与配置按原字节复制，不会悄悄替换时间表。
+`prepare-release.py` 检查配置和 ARM64 ELF 标识，拒绝覆盖已有输出目录。发布包位于 `build/releases/UTC时间戳/`，包含 `rootfs/`、`release.json` 和 `INSTALL.txt`。构建产物与配置按原字节复制，不会悄悄替换时间表。显示源码及 Makefile 同时放入显示目录，并写入同一份哈希清单，保持设备维护源码与发布版本一致。
 
-发布包将显示程序安装到 `/home/wlt/IT8951/epd`。更换设备用户名或部署目录时，必须先同步修改任务脚本和打包脚本。产物在目标系统上的运行及真实屏幕刷新需设备验证。
+发布包将显示程序安装到 `/home/wlt/IT8951/epd`。更换显示路径时设置配置的 `display.path`；发布包按该路径准备对应文件树，安装命令也要使用相同目标。产物在目标系统上的运行及真实屏幕刷新需设备验证。
 
 ## 安装到设备
 
@@ -65,11 +65,13 @@ make release CONFIG=config/local.json
 
 ```sh
 sudo mkdir -p /boot/firmware/DEBUG
-sudo install -d /opt/pisched /etc/pisched /var/log/pisched /home/wlt/IT8951
+sudo install -d /opt/pisched /etc/pisched /var/log/pisched /var/lib/pisched /home/wlt/IT8951
 sudo install -m 0755 rootfs/opt/pisched/pisched.py /opt/pisched/pisched.py
-sudo install -m 0755 rootfs/usr/local/bin/my_test_task.sh /usr/local/bin/my_test_task.sh
+sudo install -m 0755 rootfs/opt/pisched/collect_metrics.py /opt/pisched/collect_metrics.py
 sudo install -m 0644 rootfs/etc/pisched/config.json /etc/pisched/config.json
 sudo install -m 0644 rootfs/etc/systemd/system/pisched.service /etc/systemd/system/pisched.service
+sudo cp -R rootfs/home/wlt/IT8951/lib rootfs/home/wlt/IT8951/singlepage /home/wlt/IT8951/
+sudo install -m 0644 rootfs/home/wlt/IT8951/Makefile /home/wlt/IT8951/Makefile
 sudo install -m 0755 rootfs/home/wlt/IT8951/epd /home/wlt/IT8951/epd
 sudo systemctl daemon-reload
 ```
@@ -90,8 +92,21 @@ tail -n 5 /var/log/pisched/network_metrics.csv
 
 发布包不覆盖 `/boot/firmware/config.txt`、PiSugar 包管理的 unit 或电源选项。`deploy/boot/` 仅是当前 Pi Zero 2 配置参考，不能直接套用到其他板卡。
 
+## PiSugar 本地控制接口
+
+`deploy/systemd/pisugar-server.service.d/10-local-control.conf` 是独立的可选运维设置，不覆盖包管理 unit；应用发布包不自动安装。它使用当前设备 2.3.2 支持的参数，关闭 TCP 与独立 WS，HTTP 限制为 127.0.0.1:8421，UDS 权限为 660（root 运行调度器）。启用前核对 `pisugar-server --help`，在 DEBUG 下备份并安装：
+
+```sh
+sudo install -d /etc/systemd/system/pisugar-server.service.d
+sudo install -m 0644 deploy/systemd/pisugar-server.service.d/10-local-control.conf /etc/systemd/system/pisugar-server.service.d/10-local-control.conf
+sudo systemctl daemon-reload
+sudo systemctl restart pisugar-server.service
+```
+
+读回服务、socket 权限与监听地址，再验证 RTC/闹钟。需要 WebUI 时使用 `ssh -L 8421:127.0.0.1:8421 pi`，浏览本机 8421。普通用户的直接 UDS 查询改用 sudo；不要为了查询恢复 world-write。
+
 ## 从设备备份恢复
 
-保留 DEBUG。使用安装前 snapshot 的 `rootfs/` 恢复调度器、任务、JSON、项目 systemd unit 和 `/home/wlt/IT8951/epd`，沿用上面的 `install` 权限；恢复后运行 `sudo systemctl daemon-reload`，核对日志。不要将整个快照根目录直接覆盖到 `/`，也不要默认覆盖启动配置或 PiSugar 包管理文件。
+保留 DEBUG。使用安装前 snapshot 的 `rootfs/` 恢复调度器、任务、JSON、项目 systemd unit 和 `/home/wlt/IT8951/epd`（旧快照中的任务文件与其配套配置一并恢复），沿用上面的 `install` 权限；恢复后运行 `sudo systemctl daemon-reload`，核对日志。不要将整个快照根目录直接覆盖到 `/`，也不要默认覆盖启动配置或 PiSugar 包管理文件。
 
 需要完整系统灾难恢复时另做 SD 卡镜像；项目快照只负责本项目相关文件。

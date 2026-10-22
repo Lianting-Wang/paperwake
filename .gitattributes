@@ -6,4 +6,4 @@
 *.csv -text
 *.tar.gz binary
 # Preserve the C source line endings.
-src/display/** -text
+src/display/** -text whitespace=cr-at-eol

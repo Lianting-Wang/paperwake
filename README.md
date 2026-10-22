@@ -2,7 +2,7 @@
 
 Pi Zero 2、PiSugar 3 和 IT8951 电子纸组成的周期刷新状态屏。PiSugar 唤醒树莓派后，系统采集指标、刷新屏幕、安排下一次唤醒，然后关机。`pisched` 是开机执行一次的程序；DEBUG 模式下不会自行循环刷新。
 
-电池运行允许闹钟设置失败后关机；失败通知应有次数和总时限，耗尽预算后仍关机。该通知与统一失败收尾尚待实现，接口及未来电子纸错误状态见 [失败处理约定](docs/failure-handling.md)。
+电池运行允许闹钟设置失败后关机；失败通知应有次数和总时限，耗尽预算后仍关机。调度器已提供有界通知接口和统一失败收尾，通知命令默认留空；配置及未来电子纸错误状态见 [失败处理约定](docs/failure-handling.md)。
 
 本目录包含项目的源码、配置、构建环境和设备维护工具。
 
@@ -11,7 +11,7 @@ Pi Zero 2、PiSugar 3 和 IT8951 电子纸组成的周期刷新状态屏。PiSug
 ```text
 src/
   scheduler/pisched.py       开机调度
-  tasks/my_test_task.sh      指标采集与屏幕刷新
+  tasks/collect_metrics.py   指标采集与屏幕刷新
   display/IT8951/            单页界面和 Waveshare 驱动
 config/                     日常时间表示例、半小时测试配置
 deploy/                     systemd 服务和设备启动配置参考
@@ -34,6 +34,8 @@ build/                      编译产物和待审阅发布包，只保存在本�
 ```sh
 make check
 make preview CONFIG=config/daytime.example.json
+# 修改 C 时另用本机 Clang/GCC 做无硬件内存与超时检查
+make check-display
 ```
 
 `daytime.example.json` 暂用 **08:00、12:00、16:00、18:00** 演示日常运行。它是可编辑的示例，尚未作为正式时间表启用。`test-half-hour.json` 保留每半小时一次的测试频率。实际部署前复制选定配置为 `config/local.json` 并调整；本机配置不提交 Git。时间按树莓派的时区解释，当前设备为 `America/New_York`。

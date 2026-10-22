@@ -70,6 +70,8 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(staged.read_bytes(), config.read_bytes())
             self.assertTrue((output / 'rootfs/home/wlt/IT8951/epd').stat().st_mode & 0o111)
             self.assertFalse((output / 'rootfs/boot').exists())
+            self.assertEqual((output/'rootfs/home/wlt/IT8951/singlepage/page.c').read_bytes(),
+                             (ROOT/'src/display/IT8951/singlepage/page.c').read_bytes())
             with self.assertRaises(ValueError):
                 release.prepare(config, binary, output)
 
