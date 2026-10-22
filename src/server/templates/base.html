@@ -1,6 +1,20 @@
 <!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{% block title %}电子纸管理{% endblock %}</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
-<body><div class="shell"><header><a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">e.</span><span>电子纸 <span class="muted">/ 管理中心</span></span></a>{% if session.get('admin') %}<form action="{{ url_for('logout') }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="text-button">退出登录</button></form>{% endif %}</header>
-{% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<p role="status" class="notice {{ category }}">{{ message }}</p>{% endfor %}{% endwith %}
-<main>{% block content %}{% endblock %}</main><footer>电子纸设备管理 <span>修改将在设备下次报到时生效。</span></footer></div></body></html>
+<html lang="{{ 'zh-CN' if ui_language == 'zh' else 'en' }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{% block title %}{{ t('电子纸管理') }}{% endblock %}</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=style_version) }}"></head>
+<body><div class="shell">
+<header>
+  <a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">e.</span><span>{{ t('电子纸') }} <span class="muted">/ {{ t('管理中心') }}</span></span></a>
+  <div class="header-actions">
+    <form class="language-switch" action="{{ url_for('set_language') }}" method="post" aria-label="{{ t('界面语言') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ request.full_path }}">
+      <button name="language" value="zh" lang="zh-CN" aria-pressed="{{ 'true' if ui_language == 'zh' else 'false' }}" class="{{ 'selected' if ui_language == 'zh' else '' }}">中文</button>
+      <button name="language" value="en" lang="en" aria-pressed="{{ 'true' if ui_language == 'en' else 'false' }}" class="{{ 'selected' if ui_language == 'en' else '' }}">English</button>
+    </form>
+    {% if session.get('admin') %}<form action="{{ url_for('logout') }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="text-button">{{ t('退出登录') }}</button></form>{% endif %}
+  </div>
+</header>
+{% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<p role="status" class="notice {{ category }}">{{ t(message) }}</p>{% endfor %}{% endwith %}
+<main>{% block content %}{% endblock %}</main>
+<footer>{{ t('电子纸设备管理') }} <span>{{ t('修改将在设备下次报到时生效。') }}</span></footer>
+</div></body></html>

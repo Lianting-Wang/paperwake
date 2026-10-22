@@ -1,3 +1,12 @@
 {% extends 'base.html' %}
-{% block title %}报告历史 · 电子纸管理{% endblock %}
-{% block content %}<a class="back" href="{{ url_for('dashboard') }}">← 返回设备概览</a><div class="page-heading"><div><p class="eyebrow">报告历史 · 保留 30 天</p><h1>每次报到，都有记录。</h1><p class="muted">{{ device_id }} · 以下接收时间均为服务器 UTC 时间。</p></div></div><section class="panel history">{% for report in reports %}<details><summary><span class="badge {{ 'healthy' if report.phase == 'check-in' else 'unknown' }}">{{ report.phase|ui_label }}</span><time>{{ report.received_at }}</time><span class="muted">{{ report.event_id }}</span></summary><p class="caption">原始报告（JSON，保留设备字段与诊断信息）</p><pre>{{ report.payload|tojson(indent=2) }}</pre></details>{% else %}<p class="muted">暂未收到报告。</p>{% endfor %}</section><div class="actions">{% if page > 1 %}<a href="{{ url_for('history', device_id=device_id, page=page-1) }}">← 较新记录</a>{% endif %}<span class="muted">第 {{ page }} 页</span>{% if more %}<a href="{{ url_for('history', device_id=device_id, page=page+1) }}">较早记录 →</a>{% endif %}</div>{% endblock %}
+{% block title %}{{ t('报告历史') }} · {{ t('电子纸管理') }}{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('dashboard') }}">← {{ t('返回设备概览') }}</a>
+<div class="page-heading"><div><p class="eyebrow">{{ t('报告历史 · 保留 30 天') }}</p><h1>{{ t('每次报到，都有记录。') }}</h1><p class="muted">{{ device_id }} · {{ t('以下接收时间均为服务器 UTC 时间。') }}</p></div></div>
+<section class="panel history">
+  {% for report in reports %}
+  <details><summary><span class="badge {{ 'healthy' if report.phase == 'check-in' else 'unknown' }}">{{ report.phase|ui_label }}</span><time>{{ report.received_at }}</time><span class="muted">{{ report.event_id }}</span></summary><p class="caption">{{ t('原始报告（JSON，保留设备字段与诊断信息）') }}</p><pre>{{ report.payload|tojson(indent=2) }}</pre></details>
+  {% else %}<p class="muted">{{ t('暂未收到报告。') }}</p>{% endfor %}
+</section>
+<div class="actions">{% if page > 1 %}<a href="{{ url_for('history', device_id=device_id, page=page-1) }}">← {{ t('较新记录') }}</a>{% endif %}<span class="muted">{{ t('第 {number} 页', number=page) }}</span>{% if more %}<a href="{{ url_for('history', device_id=device_id, page=page+1) }}">{{ t('较早记录') }} →</a>{% endif %}</div>
+{% endblock %}

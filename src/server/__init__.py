@@ -10,10 +10,13 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+from urllib.parse import urlsplit
 
 from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash
+
+from .i18n import LANGUAGE_COOKIE, LANGUAGES, get_language, t
 
 DEFAULT_DISPLAY = {'title': 'E-PAPER', 'status': 'Ready', 'rows': [
     {'label': 'Device', 'value': 'Connected'}, {'label': 'Content', 'value': 'Edit in the control panel'}]}
@@ -44,14 +47,14 @@ HTTP_ERRORS = {
 
 
 def ui_label(value):
-    return UI_LABELS.get(value, value) if isinstance(value, str) else '未知'
+    return t(UI_LABELS.get(value, value)) if isinstance(value, str) else t('未知')
 
 
 def display_result_label(payload):
     value = payload.get('display', {}).get('status', payload.get('display_result',
         payload.get('task', {}).get('status', payload.get('metrics', {}).get('display_returncode'))))
     if type(value) is int:
-        return '成功' if value == 0 else f'失败（退出码 {value}）'
+        return t('成功') if value == 0 else t('失败（退出码 {code}）', code=value)
     return ui_label(value)
 
 
@@ -72,21 +75,22 @@ def timestamp(value):
 
 def validate_display(value):
     if not isinstance(value, dict) or set(value) != {'title', 'status', 'rows'}:
-        raise ValueError('屏幕内容必须包含标题、状态和信息行。')
+        raise ValueError(t('屏幕内容必须包含标题、状态和信息行。'))
     def text(key, raw, limit, allow_empty=False):
         if not isinstance(raw, str) or len(raw) > limit or (not raw and not allow_empty):
-            raise ValueError(f'{key}须包含 {1 if not allow_empty else 0}–{limit} 个字符。')
+            raise ValueError(t('{field}须包含 {minimum}–{maximum} 个字符。',
+                               field=t(key), minimum=0 if allow_empty else 1, maximum=limit))
         if any(ord(char) < 32 or ord(char) > 126 for char in raw):
-            raise ValueError(f'{key}仅支持英文、数字和可打印 ASCII 符号。')
+            raise ValueError(t('{field}仅支持英文、数字和可打印 ASCII 符号。', field=t(key)))
         return raw
     rows = value['rows']
     if not isinstance(rows, list) or len(rows) > 6:
-        raise ValueError('最多可设置六条显示信息。')
+        raise ValueError(t('最多可设置六条显示信息。'))
     result = {'title': text('标题', value['title'], 40),
               'status': text('状态', value['status'], 24), 'rows': []}
     for row in rows:
         if not isinstance(row, dict) or set(row) != {'label', 'value'}:
-            raise ValueError('每条显示信息都需要名称和内容。')
+            raise ValueError(t('每条显示信息都需要名称和内容。'))
         result['rows'].append({'label': text('名称', row['label'], 20),
                                'value': text('内容', row['value'], 48, True)})
     return result
@@ -108,6 +112,13 @@ def _database():
 def create_app(config=None):
     app = Flask(__name__)
     app.jinja_env.filters.update(ui_label=ui_label, display_result_label=display_result_label)
+    app.jinja_env.globals['t'] = t
+    app.jinja_env.globals['style_version'] = hashlib.sha256(
+        (Path(__file__).parent / 'static/style.css').read_bytes()).hexdigest()[:12]
+
+    @app.context_processor
+    def language_context():
+        return {'ui_language': get_language()}
     app.config.from_mapping(
         DATABASE=os.environ.get('DATABASE', 'data/runtime/server.sqlite3'),
         SECRET_KEY=os.environ.get('SECRET_KEY', ''),
@@ -212,8 +223,8 @@ def create_app(config=None):
         title, description = HTTP_ERRORS.get(error.code, ('请求失败', '请稍后重试。'))
         if error.description != type(error).description:
             description = error.description
-        return render_template('error.html', error=error, error_title=title,
-                               error_description=description), error.code
+        return render_template('error.html', error=error, error_title=t(title),
+                               error_description=t(description)), error.code
 
     def login_required(fn):
         @wraps(fn)
@@ -324,6 +335,27 @@ def create_app(config=None):
         db.commit()
         return jsonify(accepted=True)
 
+    @app.post('/language')
+    def set_language():
+        language = request.form.get('language')
+        if language not in LANGUAGES:
+            abort(400, '不支持此语言。')
+        destination = request.form.get('next', '/')
+        # The switch returns to the same local page, including history pagination.
+        # Never allow a client-supplied external redirect or ambiguous backslashes.
+        try:
+            parsed = urlsplit(destination)
+            safe = (destination.startswith('/') and not destination.startswith('//')
+                    and not parsed.scheme and not parsed.netloc and '\\' not in destination
+                    and not any(ord(char) < 32 or ord(char) == 127 for char in destination))
+        except ValueError:
+            safe = False
+        response = redirect(destination if safe else url_for('dashboard'))
+        response.set_cookie(LANGUAGE_COOKIE, language, max_age=365 * 24 * 3600,
+                            httponly=True, secure=app.config['SESSION_COOKIE_SECURE'],
+                            samesite='Lax', path='/')
+        return response
+
     @app.route('/login', methods=['GET', 'POST'])
     def login():
         if request.method == 'POST':
@@ -432,21 +464,21 @@ def expected_next_run(payload):
 def health(device, now):
     payload = device['payload']
     if not device.get('last_seen_at'):
-        return 'unknown', '等待设备首次报到'
+        return 'unknown', t('等待设备首次报到')
     shutdown = payload.get('shutdown', {})
     if payload.get('debug_hold') is True or shutdown.get('status') == 'debug':
-        return 'maintenance', '维护中 · 保持开机'
+        return 'maintenance', t('维护中 · 保持开机')
     if not device.get('latest_report_at'):
         if payload.get('local_debug') is True:
-            return 'maintenance', '维护中 · 本地调试'
+            return 'maintenance', t('维护中 · 本地调试')
         contact = timestamp(device.get('last_seen_at'))
         if contact and now > contact + timedelta(minutes=10):
-            return 'fault', '周期未完成 · 未收到最终报告'
+            return 'fault', t('周期未完成 · 未收到最终报告')
     expected = timestamp(expected_next_run(payload))
     if expected and now - expected > timedelta(minutes=10):
-        return 'missing', '设备失联 · 超过预计报到时间'
+        return 'missing', t('设备失联 · 超过预计报到时间')
     if payload.get('failures') or payload.get('pending_failures'):
-        return 'fault', '设备上报异常'
+        return 'fault', t('设备上报异常')
     if expected:
-        return 'healthy', '计划休眠'
-    return 'unknown', '下次报到时间未知'
+        return 'healthy', t('计划休眠')
+    return 'unknown', t('下次报到时间未知')

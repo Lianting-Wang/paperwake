@@ -58,6 +58,93 @@ class ServerTests(unittest.TestCase):
         fields['csrf_token'] = self.csrf('/devices/test-screen/settings')
         return self.client.post('/devices/test-screen/settings', data=fields)
 
+    def switch_language(self, language, destination='/login'):
+        return self.client.post('/language', data={'csrf_token': self.csrf(),
+                                                   'language': language, 'next': destination})
+
+    def test_language_defaults_to_chinese_even_with_english_browser(self):
+        response = self.client.get('/login', headers={'Accept-Language': 'en-US,en;q=0.9'})
+        self.assertIn(b'<html lang="zh-CN">', response.data)
+        self.assertIn('用户名'.encode(), response.data)
+        self.assertIn(b'English', response.data)
+        self.client.set_cookie('epaper_language', 'unsupported')
+        self.assertIn(b'<html lang="zh-CN">', self.client.get('/login').data)
+
+    def test_language_selection_survives_login_refresh_and_logout(self):
+        response = self.switch_language('en')
+        self.assertEqual(response.status_code, 302)
+        cookie = next(value for value in response.headers.getlist('Set-Cookie')
+                      if value.startswith('epaper_language='))
+        self.assertIn('Max-Age=31536000', cookie)
+        self.assertIn('HttpOnly', cookie)
+        self.assertIn('SameSite=Lax', cookie)
+        self.assertNotIn('Secure;', cookie)
+        self.assertIn(b'<html lang="en">', self.client.get('/login').data)
+        self.login()
+        self.assertIn(b'Your screen, connected.', self.client.get('/').data)
+        self.assertIn(b'Your screen, connected.', self.client.get('/').data)
+        self.client.post('/logout', data={'csrf_token': self.csrf('/')})
+        self.assertIn(b'Username', self.client.get('/login').data)
+        self.switch_language('zh')
+        self.assertIn('用户名'.encode(), self.client.get('/login').data)
+
+    def test_switch_returns_to_current_page_without_changing_device_settings(self):
+        self.login()
+        original = self.device()
+        path = '/devices/test-screen/history?page=2'
+        response = self.switch_language('en', path)
+        self.assertEqual(response.headers['Location'], path)
+        self.assertIn(b'Page 2', self.client.get(path).data)
+        self.assertIn(b'On the screen', self.client.get('/devices/test-screen/settings').data)
+        self.assertEqual(self.device()['debug'], original['debug'])
+        self.assertEqual(self.device()['display_json'], original['display_json'])
+        self.switch_language('zh', '/devices/test-screen/settings')
+        self.assertIn('屏幕显示内容'.encode(), self.client.get('/devices/test-screen/settings').data)
+
+    def test_english_statuses_forms_history_and_errors(self):
+        self.switch_language('en')
+        self.login()
+        response = self.settings(title='你好')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b'Title accepts English', response.data)
+        self.settings()
+        self.assertIn(b'Settings apply at the next check-in.', self.client.get('/').data)
+        self.check_in()
+        self.report(failures=[], debug_hold=True, display={'status': 'ok'}, shutdown_intent='hold')
+        dashboard = self.client.get('/').data
+        self.assertIn(b'Maintenance', dashboard)
+        self.assertIn(b'<dt>Display result</dt><dd>Success</dd>', dashboard)
+        self.assertIn(b'Stay awake', dashboard)
+        history = self.client.get('/devices/test-screen/history').data
+        self.assertIn(b'Final report', history)
+        self.assertIn(b'Raw report', history)
+        self.assertIn(b'Page not found', self.client.get('/not-a-page').data)
+        self.assertIn(b'The form expired', self.client.post('/logout').data)
+
+    def test_language_switch_has_csrf_and_rejects_external_redirects(self):
+        self.assertEqual(self.client.get('/language').status_code, 405)
+        self.assertEqual(self.client.post('/language', data={'language': 'en'}).status_code, 400)
+        self.assertEqual(self.switch_language('fr').status_code, 400)
+        for destination in ('https://example.com/', '//example.com/', '/\\example.com/',
+                            '/\n//example.com/', '//[broken'):
+            with self.subTest(destination=destination):
+                response = self.switch_language('en', destination)
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response.headers['Location'], '/')
+
+    def test_language_cookie_is_secure_on_https_management_url(self):
+        app = create_app(dict(self.config, BASE_URL='https://paper.example.com'))
+        client = app.test_client()
+        response = client.get('/login', base_url='https://paper.example.com')
+        token = re.search(rb'name="csrf_token" value="([^"]+)"', response.data)[1].decode()
+        response = client.post('/language', data={'csrf_token': token, 'language': 'en', 'next': '/login'},
+                               base_url='https://paper.example.com')
+        self.assertEqual(response.status_code, 302)
+        cookie = next(value for value in response.headers.getlist('Set-Cookie')
+                      if value.startswith('epaper_language='))
+        self.assertIn('Secure;', cookie)
+        self.assertIn(b'Username', client.get('/login', base_url='https://paper.example.com').data)
+
     def test_checkin_auth_content_and_no_admin_access_with_device_token(self):
         payload = {'device_id': 'test-screen', 'event_id': 'boot-1', 'started_at': self.now.isoformat()}
         for headers in ({}, {'Authorization': 'Bearer incorrect'}):

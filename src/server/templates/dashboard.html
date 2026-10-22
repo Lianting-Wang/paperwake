@@ -1,4 +1,37 @@
 {% extends 'base.html' %}
-{% block content %}<div class="page-heading"><div><p class="eyebrow">设备概览</p><h1>电子纸设备管理</h1><p class="muted">页面刷新时间 {{ now }} · <a href="{{ url_for('dashboard') }}">刷新状态</a></p></div><span class="pill">{{ devices|length }} 台设备</span></div>
-{% for device in devices %}<section class="device panel"><div class="device-heading"><div><span class="eyebrow">电子纸设备</span><h2>{{ device.device_id }}</h2></div><span class="badge {{ device.health }}">{{ device.health_label }}</span></div><div class="device-grid"><div><div class="screen"><div class="screen-top"><strong>{{ device.display.title }}</strong><span>v{{ device.content_version }}</span></div><p class="screen-status">{{ device.display.status }}</p><dl>{% for row in device.display.rows %}<div><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div>{% endfor %}</dl></div><p class="caption">当前配置预览；设备实际使用的版本和刷新结果见右侧状态。</p></div><div class="telemetry"><dl class="facts"><div><dt>最近报到</dt><dd>{{ device.last_seen_at or '尚未连接' }}</dd></div><div><dt>电量</dt><dd>{{ device.battery_percent if device.battery_percent is not none else '—' }}{% if device.battery_percent is not none %}%{% endif %}</dd></div><div><dt>Wi-Fi 信号</dt><dd>{{ device.wifi_rssi if device.wifi_rssi is not none else '—' }}{% if device.wifi_rssi is not none %} dBm{% endif %}</dd></div><div><dt>请求耗时</dt><dd>{{ device.payload.get('server', {}).get('latency_ms', '—') }} ms</dd></div><div><dt>屏幕刷新</dt><dd>{{ device.payload|display_result_label }}</dd></div><div><dt>已上报内容版本</dt><dd>{{ device.payload.get('content_version', '未知') }}</dd></div><div><dt>唤醒闹钟</dt><dd>{{ '已确认' if device.payload.get('alarm_confirmed') else '尚未确认' }}</dd></div><div><dt>下次唤醒</dt><dd>{{ device.expected_next_run or '未知' }}</dd></div><div><dt>远程调试</dt><dd>{{ '已开启，下次报到生效' if device.debug else '已关闭，下次报到生效' }}</dd></div><div><dt>电源计划</dt><dd>{{ device.payload.get('shutdown_intent', '未知')|ui_label }} <span class="muted">· 尚未确认实际断电</span></dd></div></dl></div></div>
-{% if device.failures %}<div class="fault-box"><strong>设备上报的异常</strong><ul>{% for failure in device.failures %}<li>{% if failure is mapping %}{{ failure.get('stage', '未知阶段')|ui_label }} · {{ failure.get('message', failure.get('error', failure)) }}{% else %}{{ failure }}{% endif %}</li>{% endfor %}</ul></div>{% endif %}<div class="actions"><a class="primary" href="{{ url_for('settings', device_id=device.device_id) }}">编辑内容与调试 <span>↗</span></a><a href="{{ url_for('history', device_id=device.device_id) }}">查看报告历史 →</a></div></section>{% endfor %}<p class="caption">管理地址： {{ base_url }}. 设备状态以报告为依据；“计划休眠”不代表已确认实际断电。</p>{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">{{ t('设备概览') }}</p><h1>{{ t('电子纸设备管理') }}</h1><p class="muted">{{ t('页面刷新时间') }} {{ now }} · <a href="{{ url_for('dashboard') }}">{{ t('刷新状态') }}</a></p></div>
+  <span class="pill">{{ t('1 台设备') if devices|length == 1 else t('{count} 台设备', count=devices|length) }}</span>
+</div>
+{% for device in devices %}
+<section class="device panel">
+  <div class="device-heading"><div><span class="eyebrow">{{ t('电子纸设备') }}</span><h2>{{ device.device_id }}</h2></div><span class="badge {{ device.health }}">{{ device.health_label }}</span></div>
+  <div class="device-grid">
+    <div>
+      <div class="screen">
+        <div class="screen-top"><strong>{{ device.display.title }}</strong><span>v{{ device.content_version }}</span></div>
+        <p class="screen-status">{{ device.display.status }}</p>
+        <dl>{% for row in device.display.rows %}<div><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div>{% endfor %}</dl>
+      </div>
+      <p class="caption">{{ t('当前配置预览；设备实际使用的版本和刷新结果见右侧状态。') }}</p>
+    </div>
+    <div class="telemetry"><dl class="facts">
+      <div><dt>{{ t('最近报到') }}</dt><dd>{{ device.last_seen_at or t('尚未连接') }}</dd></div>
+      <div><dt>{{ t('电量') }}</dt><dd>{{ device.battery_percent if device.battery_percent is not none else '—' }}{% if device.battery_percent is not none %}%{% endif %}</dd></div>
+      <div><dt>{{ t('Wi-Fi 信号') }}</dt><dd>{{ device.wifi_rssi if device.wifi_rssi is not none else '—' }}{% if device.wifi_rssi is not none %} dBm{% endif %}</dd></div>
+      <div><dt>{{ t('请求耗时') }}</dt><dd>{{ device.payload.get('server', {}).get('latency_ms', '—') }} ms</dd></div>
+      <div><dt>{{ t('屏幕刷新') }}</dt><dd>{{ device.payload|display_result_label }}</dd></div>
+      <div><dt>{{ t('已上报内容版本') }}</dt><dd>{{ device.payload.get('content_version', t('未知')) }}</dd></div>
+      <div><dt>{{ t('唤醒闹钟') }}</dt><dd>{{ t('已确认') if device.payload.get('alarm_confirmed') else t('尚未确认') }}</dd></div>
+      <div><dt>{{ t('下次唤醒') }}</dt><dd>{{ device.expected_next_run or t('未知') }}</dd></div>
+      <div><dt>{{ t('远程调试') }}</dt><dd>{{ t('已开启，下次报到生效') if device.debug else t('已关闭，下次报到生效') }}</dd></div>
+      <div><dt>{{ t('电源计划') }}</dt><dd>{{ device.payload.get('shutdown_intent', t('未知'))|ui_label }} <span class="muted">· {{ t('尚未确认实际断电') }}</span></dd></div>
+    </dl></div>
+  </div>
+  {% if device.failures %}<div class="fault-box"><strong>{{ t('设备上报的异常') }}</strong><ul>{% for failure in device.failures %}<li>{% if failure is mapping %}{{ failure.get('stage', t('未知阶段'))|ui_label }} · {{ failure.get('message', failure.get('error', failure)) }}{% else %}{{ failure }}{% endif %}</li>{% endfor %}</ul></div>{% endif %}
+  <div class="actions"><a class="primary" href="{{ url_for('settings', device_id=device.device_id) }}">{{ t('编辑内容与调试') }} <span>↗</span></a><a href="{{ url_for('history', device_id=device.device_id) }}">{{ t('查看报告历史') }} →</a></div>
+</section>
+{% endfor %}
+<p class="caption">{{ t('管理地址') }}: {{ base_url }} · {{ t('设备状态以报告为依据；“计划休眠”不代表已确认实际断电。') }}</p>
+{% endblock %}
