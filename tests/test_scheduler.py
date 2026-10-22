@@ -71,6 +71,20 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 s.validate_config(dict(schedule=['08:00'], **raw))
 
+    def test_timeout_types_are_rejected_as_configuration_errors(self):
+        for value in (None, '5', False, 2.5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                s.validate_config({'schedule':['08:00'], 'task':{'timeout_sec':value}})
+
+    def test_alarm_margin_must_cover_failure_cleanup(self):
+        with self.assertRaisesRegex(ValueError, 'shutdown_margin_seconds'):
+            s.validate_config({'schedule':['08:00'], 'runtime':{'shutdown_margin_seconds':1}})
+        with self.assertRaisesRegex(ValueError, 'shutdown_margin_seconds'):
+            s.validate_config({'schedule':['08:00'], 'notification':{'total_timeout_sec':80}})
+        cfg = s.validate_config({'schedule':['08:00']})
+        cfg['runtime']['shutdown_margin_seconds'] = s.cleanup_reserve(cfg)
+        self.assertEqual(s.validate_config(cfg)['runtime']['shutdown_margin_seconds'], s.cleanup_reserve(cfg))
+
 
 class ProcessTests(unittest.TestCase):
     def test_silent_task_deadline(self):
@@ -245,7 +259,53 @@ class CycleTests(unittest.TestCase):
         mocks = self.effects()
         mocks['shutdown'].return_value = {'status': 'failed'}
         self.assertEqual(s.run_cycle(self.cfg), 1)
-        self.assertIn('shutdown', [f['stage'] for f in s.read_json(self.cfg['state_file'])['failures']])
+        state = s.read_json(self.cfg['state_file'])
+        self.assertIn('shutdown', [f['stage'] for f in state['failures']])
+        self.assertEqual(state['last_failure']['event_id'], state['event_id'])
+        self.assertFalse(state['recovered'])
+        self.assertEqual(state['notification']['status'], 'not_configured')
+
+    def test_shutdown_failure_updates_last_failure_and_cancels_recovery(self):
+        mocks = self.effects()
+        s.atomic_json(self.cfg['state_file'], {'last_failure': {'event_id': 'old'}})
+        mocks['shutdown'].return_value = {'status': 'failed'}
+        self.assertEqual(s.run_cycle(self.cfg), 1)
+        state = s.read_json(self.cfg['state_file'])
+        self.assertFalse(state['recovered'])
+        self.assertEqual(state['last_failure']['event_id'], state['event_id'])
+        self.assertIn('shutdown', [item['stage'] for item in state['last_failure']['failures']])
+
+    def test_first_failure_during_shutdown_uses_original_notification_deadline(self):
+        mocks = self.effects()
+        clock = [0.0]
+        def shutdown(cfg, state, budget):
+            clock[0] += 5
+            return {'status': 'failed'}
+        mocks['shutdown'].side_effect = shutdown
+        self.cfg['notification']['command'] = ['/test/notify']
+        entries = []
+        def notify_result(cfg, state, budget):
+            entries.append((state['notification']['status'], budget.deadline))
+            return ({'status': 'not_needed', 'attempts': 0} if len(entries) == 1
+                    else {'status': 'accepted', 'attempts': 1})
+        with patch.object(s.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(s, 'notify_failure', side_effect=notify_result) as notify:
+            self.assertEqual(s.run_cycle(self.cfg), 1)
+        self.assertEqual(notify.call_count, 2)
+        self.assertEqual(entries, [('pending', 20), ('pending', 20)])
+        state = s.read_json(self.cfg['state_file'])
+        self.assertEqual(state['last_failure']['notification']['status'], 'accepted')
+        self.assertFalse(state['recovered'])
+
+    def test_shutdown_failure_does_not_restart_consumed_notification_attempts(self):
+        mocks = self.effects()
+        mocks['task'].return_value = 1
+        mocks['shutdown'].return_value = {'status': 'failed'}
+        self.cfg['notification']['command'] = ['/test/notify']
+        with patch.object(s, 'notify_failure', return_value={'status':'failed', 'attempts':3}) as notify:
+            self.assertEqual(s.run_cycle(self.cfg), 1)
+        notify.assert_called_once()
+        self.assertEqual(s.read_json(self.cfg['state_file'])['notification']['attempts'], 3)
 
     def test_debug_overrides_shutdown_and_normal_mode_retries(self):
         with patch.object(s.os.path, 'exists', return_value=True), patch.object(s, 'run_command') as command:

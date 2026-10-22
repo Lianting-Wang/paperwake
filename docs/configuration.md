@@ -19,7 +19,7 @@
 | `task.timeout_sec` | 120 秒，管理整个进程组 |
 | `runtime.max_seconds` | 应用本轮总预算 240 秒，最多 240；提前为通知、显示和关机预留时间 |
 | `runtime.time_sync_seconds` | NTP 最多等待 30 秒；已同步时不会用旧 RTC 覆盖系统时间 |
-| `runtime.shutdown_margin_seconds` | 闹钟至少留出 60 秒；任务后重算，包含通知和关机时间 |
+| `runtime.shutdown_margin_seconds` | 默认 60 秒；任务后重算，配置不得短于通知、错误显示、关机调用和持久化收尾的预留总预算 |
 | `runtime.low_battery_percent` | 10%；低电量跳过采集、通知重试和错误页面，仍尝试安排闹钟并关机 |
 | `runtime.rtc_min_year` | 2025；离线 RTC 还不得早于上次 NTP 可信记录减 5 分钟 |
 | `shutdown.command` | `/sbin/shutdown -h now` |

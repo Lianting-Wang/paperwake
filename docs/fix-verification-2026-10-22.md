@@ -13,7 +13,7 @@
 
 ## 本地验证
 
-- `make check`：46 项标准库回归测试通过，覆盖进程后代、静默任务、RTC/NTP、跨点、DST、通知次数/总期限、异常收尾、低电量、状态恢复与采集失败。
+- `make check`：首轮 46 项、补充复核后 51 项标准库回归测试通过，覆盖进程后代、静默任务、RTC/NTP、跨点、DST、通知次数/总期限、异常收尾、低电量、状态恢复与采集失败。
 - `make check-display`：Clang ASan/UBSan 无硬件探针通过，覆盖真实尺寸页面、4 bpp、边界像素、busy/display-ready 超时及取消。
 - ARM64 Debian 13 容器重新构建成功；产物 SHA-256 为 `6a57e278b8c2562987a64f6c7e2b59163097dea14bf3eee3b54de69a38467a13`。
 - 白天计划预览正确，普通边界与 DST 在测试中验证。
@@ -29,10 +29,20 @@
 6. PiSugar 提前关机阈值设为 10%，延迟 30 秒，并读回核验。
 7. 03:58，临时隔离配置使任务返回 1、本地文件通知第一次失败第二次接受；事件 ID 一致，attempts=2，闹钟确认，shutdown=debug。未向任何外部服务发消息，临时测试文件自动清理。
 8. 目标 UTC 星期掩码 16 已在设备写入并读回，之后恢复现有每日掩码 127；未将 RTC 调到未来测试 DST。
-9. 最终发布目录 `build/releases/battery-fixes-20261022-r5/`；30 个应用及 C 源文件的安装哈希均核验。Pi 上对应暂存目录为 `/home/wlt/epaper-release-20261022-r5/`，安装清单位于 `/var/lib/pisched/release.json`。
-10. 04:03，最终版本在 DEBUG 下运行成功，事件 `eeddc07c-0947-4d89-a5cc-9dd61e49f218`，耗时 22.771 秒：time_source=ntp、time_trusted=true、alarm_confirmed=true、next_run=04:30、repeat=127、failures=[]、显示程序返回 0、shutdown=debug。
+9. 首轮在线验证发布目录 `build/releases/battery-fixes-20261022-r5/`；30 个应用及 C 源文件的安装哈希均核验。Pi 上对应暂存目录为 `/home/wlt/epaper-release-20261022-r5/`，安装清单位于 `/var/lib/pisched/release.json`。
+10. 04:03，该版本在 DEBUG 下运行成功，事件 `eeddc07c-0947-4d89-a5cc-9dd61e49f218`，耗时 22.771 秒：time_source=ntp、time_trusted=true、alarm_confirmed=true、next_run=04:30、repeat=127、failures=[]、显示程序返回 0、shutdown=debug。
 
-最终设备快照：`backups/device/20261022T080420Z/`，40 个文件。脚本以只读 sudo 获取 root 所有的状态文件；最终 30 个发布文件与该快照的 SHA-256 逐一相同。
+首轮设备快照：`backups/device/20261022T080420Z/`，40 个文件。脚本以只读 sudo 获取 root 所有的状态文件；最终 30 个发布文件与该快照的 SHA-256 逐一相同。
+
+## 补充复核与修复
+
+- 新增回归用例先在首轮版本复现：错误类型的 timeout 抛出 TypeError、允许不足的关机余量、关机请求失败后仍标为 recovered。随后修正校验顺序、收尾预算约束，并在每次保存时刷新 last_failure 和 recovered。
+- 首次故障若直到关机请求才出现，会先保存当前失败并标记通知 pending，再在原通知阶段尚余期限内通知；不会重置次数或总期限。测试覆盖已有通知耗尽后不重新开始，并用模拟时钟确认经过 5 秒的关机尝试后通知期限仍为原来的 20 秒。
+- 51 项测试通过；本轮只改调度器、文档和测试，C 源码与上面的 ARM64 产物不变。
+- 当前发布目录为 `build/releases/battery-fixes-20261022-r8/`，Pi 暂存目录为 `/home/wlt/epaper-release-20261022-r8/`。安装前核对上一份设备清单没有外部变更，本轮仅更新调度器，30 个发布文件的安装 SHA-256 均读回正确。
+- 在 Pi 的目标 Python 上，以 `/usr/bin/false` 替代关机命令、所有硬件调用替换、本地文件脚本替代通知通道进行探针：两次失败命令后保存当前失败，通知接受一次，last_failure 指向当前事件，recovered=false。探针事件为 `93bf312a-a33e-47fd-b445-da982fdc7b70`，拒绝执行白名单外的命令；没有执行真实关机、RTC 写入或显示任务，生产配置和 DEBUG 不变。最近一次真实采集/显示仍为上面的 04:03 记录。
+
+补充设备快照：`backups/device/20261022T083210Z/`，40 个文件；30 个发布文件与 r8 清单逐一匹配。快照中的生产状态仍是最近一次真实在线运行记录，临时探针不覆盖生产状态。
 
 ## 尚未完成的硬件验收
 

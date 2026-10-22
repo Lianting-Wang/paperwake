@@ -104,9 +104,6 @@ def validate_config(raw):
         command = cfg[section]['command']
         if not isinstance(command, str) or not shlex.split(command) or not Path(shlex.split(command)[0]).is_absolute():
             raise ValueError(f'{section}.command must start with an absolute executable')
-    for section in ('task', 'shutdown', 'display', 'notification', 'failure_display'):
-        if cfg[section]['timeout_sec'] < 2:
-            raise ValueError(f'{section}.timeout_sec must reserve process cleanup time (>=2)')
     for section in ('notification', 'failure_display'):
         argv = cfg[section]['command']
         if not isinstance(argv, list) or any(not isinstance(x, str) or not x or '\x00' in x for x in argv):
@@ -124,6 +121,9 @@ def validate_config(raw):
                 minimum = 0 if key in ('backoff_sec', 'low_battery_percent') else 1
                 if type(value) is not int or not minimum <= value <= 3600:
                     raise ValueError(f'invalid positive integer: {section}.{key}')
+    for section in ('task', 'shutdown', 'display', 'notification', 'failure_display'):
+        if cfg[section]['timeout_sec'] < 2:
+            raise ValueError(f'{section}.timeout_sec must reserve process cleanup time (>=2)')
     if cfg['notification']['max_attempts'] > 10 or cfg['shutdown']['max_attempts'] > 3 or cfg['pisugar']['max_attempts'] > 3:
         raise ValueError('too many retry attempts')
     if not 0 <= cfg['runtime']['low_battery_percent'] <= 100 or not 2020 <= cfg['runtime']['rtc_min_year'] <= 2099:
@@ -134,6 +134,8 @@ def validate_config(raw):
             raise ValueError(f'invalid network.{key}')
     if cfg['runtime']['max_seconds'] < cleanup_reserve(cfg) + 5 or cfg['runtime']['max_seconds'] > 240:
         raise ValueError('runtime.max_seconds must leave cleanup time and be <=240 (systemd safety limit)')
+    if cfg['runtime']['shutdown_margin_seconds'] < cleanup_reserve(cfg):
+        raise ValueError('runtime.shutdown_margin_seconds must cover notification, display and shutdown cleanup')
     return cfg
 
 
@@ -485,12 +487,18 @@ def run_cycle(cfg, initial_error=None):
     def failure(stage, exc):
         state['failures'].append({'stage': stage, 'message': str(exc)[:500]})
         log(f'{stage} FAILED: {exc}', cfg['log_file'])
+    def refresh_summary():
+        if state['failures']:
+            state['last_failure'] = {key: state[key] for key in ('event_id', 'started_at', 'failures', 'notification')}
+        state['recovered'] = not state['failures'] and bool(state.get('last_failure'))
     def save():
+        refresh_summary()
         try:
             atomic_json(cfg['state_file'], state)
         except (OSError, ValueError) as exc:
             if not any(item['stage'] == 'state' for item in state['failures']):
                 failure('state', exc)
+            refresh_summary()
     client = PiSugarClient(cfg['pisugar'], work, cfg['log_file'])
     try:
         if initial_error:
@@ -558,9 +566,6 @@ def run_cycle(cfg, initial_error=None):
                 state['failure_display'] = {'returncode': code}
         except Exception as exc:
             failure('failure_display', exc)
-        if state['failures']:
-            state['last_failure'] = {key: state[key] for key in ('event_id', 'started_at', 'failures', 'notification')}
-        state['recovered'] = not state['failures'] and bool(state['last_failure'])
         state['shutdown'] = {'status': 'requesting'}
         save()
         try:
@@ -570,6 +575,18 @@ def run_cycle(cfg, initial_error=None):
             state['shutdown'] = {'status': 'failed'}
         if state['shutdown']['status'] == 'failed':
             failure('shutdown', 'shutdown request failed; systemd stop hook will retry')
+            first_notification = state['notification']['status'] == 'not_needed'
+            if first_notification:
+                state['notification'] = {'status': 'pending', 'attempts': 0}
+            save()
+            if first_notification:
+                # This is the first failure, discovered after the original
+                # notification phase. Reuse its deadline, never a new budget.
+                try:
+                    state['notification'] = notify_failure(cfg, state, notify_budget)
+                except Exception as exc:
+                    state['notification'] = {'status': 'failed', 'attempts': 0}
+                    failure('notification', exc)
         state['elapsed_seconds'] = round(cfg['runtime']['max_seconds'] - overall.remaining(), 3)
         save()
         log(f"Cycle finished failures={len(state['failures'])} notification={state['notification']['status']} shutdown={state['shutdown']['status']} elapsed={state['elapsed_seconds']}s", cfg['log_file'])
