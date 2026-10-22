@@ -48,6 +48,8 @@ int main(void)
     int result;
     char lut_version[sizeof(Dev_Info.LUT_Version) + 1];
 
+    if(SinglePage_ValidateContent() != 0) return 1;
+
     signal(SIGINT, Handler);
     signal(SIGTERM, Handler);
 

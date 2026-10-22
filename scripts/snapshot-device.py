@@ -19,12 +19,12 @@ import subprocess
 
 paths = [
     '/opt/pisched/pisched.py', '/etc/pisched/config.json',
-    '/opt/pisched/collect_metrics.py', '/etc/systemd/system/pisched.service',
+    '/opt/pisched/collect_metrics.py', '/opt/pisched/server_client.py', '/etc/systemd/system/pisched.service',
     '/boot/firmware/config.txt', '/usr/lib/systemd/system/pisugar-poweroff.service',
     '/etc/default/pisugar-poweroff', '/etc/os-release',
     '/home/wlt/IT8951/epd', '/var/lib/pisched/state.json', '/var/lib/pisched/metrics.json',
     '/etc/systemd/system/pisugar-server.service.d/10-local-control.conf',
-    '/var/log/pisched/network_metrics.csv', '/var/log/pisched/pisched.log',
+    '/var/log/pisched/pisched.log',
     '/var/log/pisched/epd.log',
 ]
 display = Path('/home/wlt/IT8951')

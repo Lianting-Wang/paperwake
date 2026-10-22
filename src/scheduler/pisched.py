@@ -18,20 +18,27 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from server_client import ServerClient, ReportOutbox, validate_display, validate_server_config
+
+ALARM_RESERVE_SECONDS = 30
 DEBUG_PATHS = ('/boot/DEBUG', '/boot/firmware/DEBUG')
 DEFAULTS = {
     'timezone': 'America/New_York',
     'state_file': '/var/lib/pisched/state.json',
     'metrics_file': '/var/lib/pisched/metrics.json',
+    'outbox_file': '/var/lib/pisched/outbox.json',
     'log_file': '/var/log/pisched/pisched.log',
     'pisugar': {'uds_path': '/tmp/pisugar-server.sock', 'timeout_sec': 2, 'ready_timeout_sec': 15, 'max_attempts': 3, 'retry_delay_sec': 1},
     'task': {'command': '/usr/bin/python3 /opt/pisched/collect_metrics.py', 'timeout_sec': 120},
     'shutdown': {'command': '/sbin/shutdown -h now', 'shutdown_even_if_alarm_set_failed': True,
                  'max_attempts': 2, 'timeout_sec': 5},
-    'network': {'target': '192.168.76.71', 'interface': 'wlan0', 'ping_count': 20,
-                'ping_timeout_sec': 15},
+    'network': {'interface': 'wlan0'},
+    'server': {'base_url': 'http://192.168.76.71:8088', 'device_id': 'epaper-pi-zero2',
+               'token_file': '/etc/pisched/device.token', 'timeout_sec': 5, 'max_attempts': 3,
+               'total_timeout_sec': 20, 'backoff_sec': 1},
     'display': {'path': '/home/wlt/IT8951/epd', 'timeout_sec': 45},
-    'runtime': {'max_seconds': 240, 'time_sync_seconds': 30, 'shutdown_margin_seconds': 60,
+    'runtime': {'max_seconds': 240, 'time_sync_seconds': 30, 'shutdown_margin_seconds': 90,
                 'low_battery_percent': 10, 'rtc_min_year': 2025},
     'notification': {'command': [], 'max_attempts': 3, 'timeout_sec': 5,
                      'total_timeout_sec': 20, 'backoff_sec': 1},
@@ -92,11 +99,11 @@ def validate_config(raw):
     if not isinstance(cfg['timezone'], str):
         raise ValueError('timezone must be a zone name')
     ZoneInfo(cfg['timezone'])
-    for key in ('state_file', 'metrics_file', 'log_file'):
+    for key in ('state_file', 'metrics_file', 'outbox_file', 'log_file'):
         if not isinstance(cfg[key], str) or not Path(cfg[key]).is_absolute() or '..' in Path(cfg[key]).parts:
             raise ValueError(f'{key} must be an absolute path')
-    if len({cfg[k] for k in ('state_file', 'metrics_file', 'log_file')}) != 3:
-        raise ValueError('state, metrics and log must use distinct paths')
+    if len({cfg[k] for k in ('state_file', 'metrics_file', 'outbox_file', 'log_file')}) != 4:
+        raise ValueError('state, metrics, outbox and log must use distinct paths')
     for section, key in [('pisugar', 'uds_path'), ('display', 'path')]:
         if not isinstance(cfg[section][key], str) or not Path(cfg[section][key]).is_absolute() or '..' in Path(cfg[section][key]).parts:
             raise ValueError(f'{section}.{key} must be an absolute path')
@@ -115,9 +122,9 @@ def validate_config(raw):
     # The supported battery policy always shuts down; DEBUG is the explicit exception.
     if not cfg['shutdown']['shutdown_even_if_alarm_set_failed']:
         raise ValueError('battery operation requires shutdown_even_if_alarm_set_failed=true; use DEBUG for maintenance')
-    for section in ('pisugar', 'task', 'shutdown', 'network', 'display', 'runtime', 'notification', 'failure_display'):
+    for section in ('pisugar', 'task', 'shutdown', 'network', 'display', 'runtime', 'notification', 'failure_display', 'server'):
         for key, value in cfg[section].items():
-            if key.endswith(('_sec', '_seconds')) or key in ('max_attempts', 'max_seconds', 'ping_count', 'rtc_min_year', 'low_battery_percent'):
+            if key.endswith(('_sec', '_seconds')) or key in ('max_attempts', 'max_seconds', 'rtc_min_year', 'low_battery_percent'):
                 minimum = 0 if key in ('backoff_sec', 'low_battery_percent') else 1
                 if type(value) is not int or not minimum <= value <= 3600:
                     raise ValueError(f'invalid positive integer: {section}.{key}')
@@ -128,19 +135,20 @@ def validate_config(raw):
         raise ValueError('too many retry attempts')
     if not 0 <= cfg['runtime']['low_battery_percent'] <= 100 or not 2020 <= cfg['runtime']['rtc_min_year'] <= 2099:
         raise ValueError('invalid battery threshold or RTC minimum year')
-    for key in ('target', 'interface'):
+    cfg['server'] = validate_server_config(cfg['server'])
+    for key in ('interface',):
         value = cfg['network'][key]
         if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]+', value) or value.startswith('-'):
             raise ValueError(f'invalid network.{key}')
     if cfg['runtime']['max_seconds'] < cleanup_reserve(cfg) + 5 or cfg['runtime']['max_seconds'] > 240:
         raise ValueError('runtime.max_seconds must leave cleanup time and be <=240 (systemd safety limit)')
     if cfg['runtime']['shutdown_margin_seconds'] < cleanup_reserve(cfg):
-        raise ValueError('runtime.shutdown_margin_seconds must cover notification, display and shutdown cleanup')
+        raise ValueError('runtime.shutdown_margin_seconds must cover server reporting, notification, display and shutdown cleanup')
     return cfg
 
 
 def cleanup_reserve(cfg):
-    return (cfg['notification']['total_timeout_sec'] + cfg['failure_display']['timeout_sec'] +
+    return (cfg['server']['total_timeout_sec'] + cfg['notification']['total_timeout_sec'] + cfg['failure_display']['timeout_sec'] +
             cfg['shutdown']['max_attempts'] * cfg['shutdown']['timeout_sec'] + 3)
 
 
@@ -459,6 +467,8 @@ def notify_failure(cfg, state, budget):
 def request_shutdown(cfg, state, budget):
     if any(os.path.exists(path) for path in DEBUG_PATHS):
         return {'status': 'debug', 'attempts': 0}
+    if state.get('remote_debug') is True:
+        return {'status': 'debug', 'source': 'remote', 'attempts': 0}
     result = {'status': 'failed', 'attempts': 0}
     for _ in range(cfg['shutdown']['max_attempts']):
         remaining = budget.remaining()
@@ -481,11 +491,12 @@ def run_cycle(cfg, initial_error=None):
     overall = Budget(cfg['runtime']['max_seconds'])
     work = Budget(deadline=overall.deadline - cleanup_reserve(cfg))
     previous = read_json(cfg['state_file'])
-    state = {'schema_version': 1, 'event_id': str(uuid.uuid4()), 'device': socket.gethostname(),
+    state = {'schema_version': 2, 'device_id': cfg['server']['device_id'], 'event_id': str(uuid.uuid4()), 'device': socket.gethostname(),
              'started_at': datetime.now(timezone.utc).isoformat(), 'time_trusted': False,
              'time_source': 'unknown', 'alarm_confirmed': False, 'next_run': None, 'failures': [],
              'notification': {'status': 'pending', 'attempts': 0}, 'shutdown': {'status': 'pending'},
-             'last_trusted_time': previous.get('last_trusted_time')}
+             'last_trusted_time': previous.get('last_trusted_time'), 'remote_debug': False,
+             'server': {'status': 'pending'}, 'display': {'status': 'skipped'}}
     log(f"Cycle started event={state['event_id']} budget={cfg['runtime']['max_seconds']}s", cfg['log_file'])
     def failure(stage, exc):
         state['failures'].append({'stage': stage, 'message': str(exc)[:500]})
@@ -510,7 +521,21 @@ def run_cycle(cfg, initial_error=None):
             if not any(item['stage'] == 'state' for item in state['failures']):
                 failure('state', exc)
             refresh_summary()
+    def queue_report(phase):
+        replacing = any(item.get('event_id') == state['event_id'] and item.get('phase') == phase
+                        for item in outbox.reports)
+        state['outbox_dropped'] = outbox.dropped_count + int(
+            outbox.pending_count >= outbox.limit and not replacing)
+        outbox.enqueue(dict(state, phase=phase))
+        state['outbox_dropped'] = outbox.dropped_count
+
     client = PiSugarClient(cfg['pisugar'], work, cfg['log_file'])
+    server = ServerClient(cfg['server'], work)
+    outbox = None
+    try:
+        outbox = ReportOutbox(cfg['outbox_file'])
+    except Exception as exc:
+        failure('outbox', exc)
     try:
         if initial_error:
             raise ValueError(initial_error)
@@ -536,17 +561,43 @@ def run_cycle(cfg, initial_error=None):
             except Exception as exc:
                 failure('time', exc)
         if not state.get('low_battery'):
+            page = None
             try:
-                env = dict(os.environ, PISCHED_CONFIG=json.dumps(cfg), PISCHED_EVENT_ID=state['event_id'])
-                rc = run_task(cfg['task']['command'], min(cfg['task']['timeout_sec'], work.remaining()), cfg['log_file'], env)
-                log(f'Task rc={rc}', cfg['log_file'])
-                if rc:
-                    failure('task', f'exit status {rc}')
-                metrics = read_json(cfg['metrics_file'])
-                if metrics.get('event_id') == state['event_id']:
-                    state['metrics'] = metrics
+                refresh_timing()
+                reply = server.check_in({
+                    'device_id': state['device_id'], 'event_id': state['event_id'],
+                    'started_at': state['started_at'], 'time_trusted': state['time_trusted'],
+                    'battery_percent': state.get('battery_percent'),
+                    'local_debug': any(os.path.exists(path) for path in DEBUG_PATHS),
+                    'previous': {key: previous.get(key) for key in
+                                 ('event_id', 'finished_at', 'shutdown', 'failures')},
+                })
+                # Adopt this only after authenticated, well-formed check-in; never load from disk.
+                state['remote_debug'] = reply['debug']
+                state['server'] = {'status': 'connected', 'latency_ms': server.last_latency_ms}
+                version = reply.get('content_version')
+                if type(version) is not int or version < 1:
+                    raise ValueError('invalid content version')
+                state['content_version'] = version
+                page = validate_display(reply.get('display'))
             except Exception as exc:
-                failure('task', exc)
+                failure('server_check_in', exc)
+                if state['server']['status'] == 'pending':
+                    state['server']['status'] = 'failed'
+            if page is not None:
+                try:
+                    env = dict(os.environ, PISCHED_CONFIG=json.dumps(cfg), PISCHED_EVENT_ID=state['event_id'],
+                               PISCHED_PAGE=json.dumps(page), PISCHED_HTTP_LATENCY_MS=str(server.last_latency_ms))
+                    rc = run_task(cfg['task']['command'], min(cfg['task']['timeout_sec'], max(0, work.remaining() - ALARM_RESERVE_SECONDS)), cfg['log_file'], env)
+                    log(f'Task rc={rc}', cfg['log_file'])
+                    if rc:
+                        failure('task', f'exit status {rc}')
+                    metrics = read_json(cfg['metrics_file'])
+                    if metrics.get('event_id') == state['event_id']:
+                        state['metrics'] = metrics
+                        state['display'] = {'status': 'ok' if metrics.get('display_returncode') == 0 else 'failed'}
+                except Exception as exc:
+                    failure('task', exc)
         try:
             program_alarm(cfg, client, state)
             log(f"Alarm confirmed: {state['next_run']}", cfg['log_file'])
@@ -560,7 +611,7 @@ def run_cycle(cfg, initial_error=None):
         save()
         try:
             # Leave fixed time for the display hook, persistence and shutdown.
-            notify_budget = Budget(deadline=min(overall.deadline - cfg['failure_display']['timeout_sec'] -
+            notify_budget = Budget(deadline=min(overall.deadline - cfg['server']['total_timeout_sec'] - cfg['failure_display']['timeout_sec'] -
                                                 cfg['shutdown']['max_attempts'] * cfg['shutdown']['timeout_sec'] - 2,
                                                 time.monotonic() + cfg['notification']['total_timeout_sec']))
             state['notification'] = notify_failure(cfg, state, notify_budget)
@@ -569,15 +620,54 @@ def run_cycle(cfg, initial_error=None):
             failure('notification', exc)
         save()
         try:
-            if state['failures'] and cfg['failure_display']['command'] and not state.get('low_battery'):
-                seconds = min(cfg['failure_display']['timeout_sec'], overall.remaining() -
+            if (state['failures'] and cfg['failure_display']['command'] and not state.get('low_battery')
+                    and state['server']['status'] == 'connected'):
+                seconds = min(cfg['failure_display']['timeout_sec'], overall.remaining() - cfg['server']['total_timeout_sec'] -
                               cfg['shutdown']['max_attempts'] * cfg['shutdown']['timeout_sec'] - 2)
                 code = run_command(cfg['failure_display']['command'], seconds,
                                    input_data=json.dumps(state).encode()).returncode
                 state['failure_display'] = {'returncode': code}
         except Exception as exc:
             failure('failure_display', exc)
-        state['shutdown'] = {'status': 'requesting'}
+        local_debug = any(os.path.exists(path) for path in DEBUG_PATHS)
+        state['debug_hold'] = local_debug or state['remote_debug']
+        state['shutdown_intent'] = 'hold' if state['debug_hold'] else 'poweroff'
+        state['shutdown'] = ({'status': 'debug', 'source': 'local' if local_debug else 'remote'}
+                             if state['debug_hold'] else {'status': 'requesting'})
+        refresh_timing()
+        save()
+        report_budget = Budget(deadline=min(time.monotonic() + cfg['server']['total_timeout_sec'],
+            overall.deadline - cfg['shutdown']['max_attempts'] * cfg['shutdown']['timeout_sec'] - 2))
+        queued = False
+        if outbox is not None:
+            try:
+                queue_report('final')
+                queued = True
+                # One shared reporting budget covers the whole backlog, never per queued item.
+                if not state.get('low_battery') and state['server']['status'] == 'connected':
+                    reporter = ServerClient(cfg['server'], report_budget)
+                    state['reporting'] = outbox.flush(reporter, report_budget)
+                    if state['reporting'].get('error') or state['reporting'].get('pending'):
+                        failure('server_report', state['reporting'].get('error', 'reporting deadline exhausted'))
+                else:
+                    state['reporting'] = {'status': 'queued'}
+            except Exception as exc:
+                failure('server_report' if queued else 'outbox', exc)
+            if any(item['stage'] == 'server_report' for item in state['failures']):
+                try:
+                    # An ACK may have been lost after acceptance. A distinct outcome
+                    # supplements the immutable final report on the next connection.
+                    refresh_timing()
+                    refresh_summary()
+                    queue_report('outcome')
+                except Exception as exc:
+                    failure('outbox', exc)
+        if not queued and not state.get('low_battery') and state['server']['status'] == 'connected':
+            # A damaged/unwritable queue must not suppress live reporting of that fault.
+            try:
+                ServerClient(cfg['server'], report_budget).report(dict(state, phase='final'))
+            except Exception as exc:
+                failure('server_report', exc)
         save()
         try:
             state['shutdown'] = request_shutdown(cfg, state, overall)
@@ -600,8 +690,16 @@ def run_cycle(cfg, initial_error=None):
                     failure('notification', exc)
         refresh_timing()
         save()
+        if state['shutdown']['status'] == 'failed' and outbox is not None:
+            try:
+                queue_report('outcome')
+            except Exception as exc:
+                failure('outbox', exc)
+                save()
         log(f"Cycle finished failures={len(state['failures'])} notification={state['notification']['status']} shutdown={state['shutdown']['status']} elapsed={state['elapsed_seconds']}s", cfg['log_file'])
-    return 1 if state['failures'] else 0
+    # Exit 10 means a completed maintenance cycle with recorded failures.
+    # systemd accepts it; signals and timeouts still trigger the independent backstop.
+    return (10 if state['remote_debug'] else 1) if state['failures'] else 0
 
 
 def main():

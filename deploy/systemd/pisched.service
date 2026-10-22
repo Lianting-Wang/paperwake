@@ -5,6 +5,8 @@ After=network.target pisugar-server.service
 
 [Service]
 Type=oneshot
+# Completed remote-debug cycle with failures is a deliberate maintenance hold.
+SuccessExitStatus=10
 ExecStart=/usr/bin/python3 /opt/pisched/pisched.py /etc/pisched/config.json
 # Independent backstop for Python crashes, invalid configuration and blocked I/O.
 TimeoutStartSec=300

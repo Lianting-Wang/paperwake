@@ -1,0 +1,365 @@
+"""Real SQLite and HTTP test-client coverage; no device hardware side effects."""
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
+import re
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.server import create_app, get_db, health, validate_display
+from werkzeug.security import generate_password_hash
+
+
+class ServerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.password_hash = generate_password_hash('test-admin-password', method='pbkdf2:sha256:1000')
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.now = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+        self.config = {'TESTING': True, 'DATABASE': str(Path(self.temp.name) / 'server.db'),
+                       'SECRET_KEY': 'session-secret-' + 's' * 40, 'DEVICE_TOKEN': 'device-secret-' + 't' * 40,
+                       'DEVICE_ID': 'test-screen', 'ADMIN_USERNAME': 'owner',
+                       'ADMIN_PASSWORD_HASH': self.password_hash, 'BASE_URL': 'http://192.168.76.109:8088',
+                       'NOW': lambda: self.now}
+        self.app = create_app(self.config)
+        self.client = self.app.test_client()
+        self.auth = {'Authorization': 'Bearer ' + self.config['DEVICE_TOKEN']}
+
+    def post(self, path, data, headers=None):
+        return self.client.post('/api/v1/' + path, json=data, headers=self.auth if headers is None else headers)
+
+    def check_in(self, event='boot-1', **kwargs):
+        return self.post('check-in', dict(device_id='test-screen', event_id=event, started_at=self.now.isoformat(), **kwargs))
+
+    def report(self, event='boot-1', **kwargs):
+        return self.post('reports', dict(device_id='test-screen', event_id=event, phase='final', **kwargs))
+
+    def csrf(self, path='/login'):
+        response = self.client.get(path)
+        return re.search(rb'name="csrf_token" value="([^"]+)"', response.data)[1].decode()
+
+    def login(self):
+        return self.client.post('/login', data={'csrf_token': self.csrf(), 'username': 'owner', 'password': 'test-admin-password'})
+
+    def device(self):
+        with self.app.app_context():
+            item = dict(get_db().execute('SELECT * FROM devices').fetchone())
+        item['payload'] = json.loads(item['latest_payload'] or '{}')
+        return item
+
+    def settings(self, **updates):
+        fields = {'title': 'Today', 'status': 'All systems ready', 'label_0': 'Message', 'value_0': 'Hello, paper!'}
+        fields.update(updates)
+        fields['csrf_token'] = self.csrf('/devices/test-screen/settings')
+        return self.client.post('/devices/test-screen/settings', data=fields)
+
+    def test_checkin_auth_content_and_no_admin_access_with_device_token(self):
+        payload = {'device_id': 'test-screen', 'event_id': 'boot-1', 'started_at': self.now.isoformat()}
+        for headers in ({}, {'Authorization': 'Bearer incorrect'}):
+            self.assertEqual(self.post('check-in', payload, headers).status_code, 401)
+        payload['device_id'] = 'other-screen'
+        self.assertEqual(self.post('check-in', payload).status_code, 401)
+        response = self.check_in(battery_percent=80, local_debug=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(response.json['debug'], False)
+        self.assertEqual(response.json['content_version'], 1)
+        validate_display(response.json['display'])
+        self.assertEqual(self.client.get('/', headers=self.auth).status_code, 302)
+
+    def test_json_validation_and_body_limit(self):
+        self.assertEqual(self.client.post('/api/v1/check-in', data='oops', headers=self.auth).status_code, 400)
+        self.assertEqual(self.post('check-in', {'device_id': 'test-screen', 'event_id': 'spaces forbidden'}).status_code, 400)
+        self.assertEqual(self.post('check-in', {'device_id': 'test-screen', 'event_id': 'boot'}).status_code, 400)
+        self.assertEqual(self.check_in(battery_percent=float('nan')).status_code, 400)
+        self.assertEqual(self.check_in(huge='x' * 263000).status_code, 413)
+        self.assertEqual(self.report(phase_override='unused', failures={}).status_code, 400)
+        self.assertEqual(self.report(alarm_confirmed='true').status_code, 400)
+        self.assertEqual(self.report(next_run='2026-10-22T13:00:00').status_code, 400)
+        self.assertEqual(self.report(metrics={'values': []}).status_code, 400)
+        self.assertEqual(self.report(failures=[None]).status_code, 400)
+        self.assertEqual(self.check_in(metrics=[]).status_code, 400)
+        self.assertEqual(self.check_in(local_debug='false').status_code, 400)
+
+    def test_duplicate_reports_are_idempotent(self):
+        self.check_in()
+        self.assertTrue(self.report(content_version=1, failures=[]).json['accepted'])
+        self.report(content_version=999, failures=['changed retry'])
+        with self.app.app_context():
+            count = get_db().execute("SELECT COUNT(*) FROM events WHERE phase='final'").fetchone()[0]
+        self.assertEqual(count, 1)
+        self.assertEqual(self.device()['payload']['content_version'], 1)
+        self.assertEqual(self.device()['payload']['failures'], [])
+
+    def test_old_reports_and_old_checkin_replays_do_not_replace_current_event(self):
+        self.check_in('boot-old')
+        self.report('boot-old', failures=['old error'])
+        self.now += timedelta(hours=1)
+        self.check_in('boot-new')
+        self.report('boot-new', failures=[], content_version=2)
+        self.report('boot-old', failures=['replacement failure'])
+        self.check_in('boot-old')
+        item = self.device()
+        self.assertEqual(item['latest_event_id'], 'boot-new')
+        self.assertEqual(item['payload']['content_version'], 2)
+        self.assertEqual(item['payload']['failures'], [])
+
+    def test_shutdown_failure_outcome_replaces_final_and_cannot_be_overwritten(self):
+        self.check_in()
+        self.report(failures=[], shutdown={'status': 'requesting'})
+        outcome = {'device_id': 'test-screen', 'event_id': 'boot-1', 'phase': 'outcome',
+                   'failures': [{'stage': 'shutdown', 'message': 'request failed'}],
+                   'shutdown': {'status': 'failed'}}
+        self.assertEqual(self.post('reports', outcome).status_code, 200)
+        self.assertEqual(self.device()['payload']['shutdown']['status'], 'failed')
+        self.report(failures=[])
+        self.assertEqual(self.device()['payload']['phase'], 'outcome')
+
+    def test_outcome_before_final_has_precedence(self):
+        self.check_in()
+        self.post('reports', {'device_id': 'test-screen', 'event_id': 'boot-1', 'phase': 'outcome',
+                              'failures': ['shutdown failed']})
+        self.report(failures=[])
+        self.assertEqual(self.device()['payload']['phase'], 'outcome')
+
+    def test_incomplete_cycle_after_ten_minutes_and_local_debug_exception(self):
+        self.check_in()
+        self.assertEqual(health(self.device(), self.now)[0], 'unknown')
+        self.now += timedelta(minutes=11)
+        self.assertEqual(health(self.device(), self.now)[0], 'fault')
+        self.check_in('local-maintenance', local_debug=True)
+        self.now += timedelta(days=1)
+        self.assertEqual(health(self.device(), self.now)[0], 'maintenance')
+
+    def test_previous_fault_remains_until_new_cycle_success_and_debug_does_not_carry(self):
+        self.check_in('failed-boot')
+        self.report('failed-boot', failures=[{'stage': 'display', 'message': 'display failed'}],
+                    debug_hold=True, shutdown={'status': 'debug', 'source': 'remote'})
+        self.assertEqual(health(self.device(), self.now)[0], 'maintenance')
+        self.check_in('pending-boot', local_debug=False)
+        pending = self.device()
+        self.assertEqual(health(pending, self.now)[0], 'fault')
+        self.assertNotIn('debug_hold', pending['payload'])
+        self.assertNotIn('shutdown', pending['payload'])
+        self.assertEqual(pending['payload']['pending_failures'][0]['message'], 'display failed')
+        self.login()
+        self.assertIn(b'display failed', self.client.get('/').data)
+        with self.app.app_context():
+            raw = json.loads(get_db().execute("SELECT payload FROM events WHERE event_id='pending-boot'").fetchone()[0])
+        self.assertNotIn('pending_failures', raw)
+        self.check_in('another-pending-boot')
+        self.assertEqual(health(self.device(), self.now)[0], 'fault')
+        self.report('another-pending-boot', failures=[], alarm_confirmed=True, time_trusted=True,
+                    next_run=(self.now + timedelta(hours=1)).isoformat(), debug_hold=False)
+        self.assertEqual(health(self.device(), self.now)[0], 'healthy')
+        self.assertNotIn('pending_failures', self.device()['payload'])
+        self.assertNotIn(b'display failed', self.client.get('/').data)
+
+    def test_outage_report_without_checkin_is_historical(self):
+        self.check_in('current')
+        self.report('current', failures=[], content_version=2)
+        self.report('offline-previous', failures=['could not connect'], content_version=1)
+        self.assertEqual(self.device()['latest_event_id'], 'current')
+        self.assertEqual(self.device()['payload']['content_version'], 2)
+        with self.app.app_context():
+            self.assertIsNotNone(get_db().execute("SELECT 1 FROM events WHERE event_id='offline-previous'").fetchone())
+
+    def test_clock_correction_does_not_block_new_checkin(self):
+        self.check_in('boot-1')
+        self.report('boot-1', failures=['error'])
+        response = self.post('check-in', {'device_id': 'test-screen', 'event_id': 'boot-2',
+                                         'started_at': '2020-01-01T00:00:00+00:00'})
+        self.assertEqual(response.status_code, 200)
+        self.report('boot-2', failures=[], time_trusted=False)
+        self.assertEqual(self.device()['latest_event_id'], 'boot-2')
+
+    def test_admin_login_csrf_logout_and_credentials_separation(self):
+        self.assertEqual(self.client.get('/').status_code, 302)
+        self.assertEqual(self.client.post('/login', data={'username': 'owner', 'password': 'test-admin-password'}).status_code, 400)
+        token = self.csrf()
+        self.assertEqual(self.client.post('/login', data={'csrf_token': token, 'username': 'wrong', 'password': 'test-admin-password'}).status_code, 401)
+        self.assertEqual(self.login().status_code, 302)
+        response = self.client.get('/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Your screen, connected.', response.data)
+        self.assertEqual(self.check_in().status_code, 200)
+        self.assertEqual(self.post('check-in', {'device_id': 'test-screen', 'event_id': 'boot', 'started_at': self.now.isoformat()}, {}).status_code, 401)
+        self.assertEqual(self.client.post('/logout').status_code, 400)
+        self.assertEqual(self.client.post('/logout', data={'csrf_token': self.csrf('/')}).status_code, 302)
+        self.assertEqual(self.client.get('/').status_code, 302)
+
+    def test_settings_updates_content_debug_version_and_rejects_unicode(self):
+        self.login()
+        self.assertEqual(self.settings(debug='on').status_code, 302)
+        response = self.check_in().json
+        self.assertIs(response['debug'], True)
+        self.assertEqual(response['content_version'], 2)
+        self.assertEqual(response['display']['rows'][0]['value'], 'Hello, paper!')
+        self.assertEqual(self.settings().status_code, 302)
+        self.assertEqual(self.check_in('boot-2').json['content_version'], 2)
+        self.assertIs(self.check_in('boot-2').json['debug'], False)
+        self.assertEqual(self.settings(title='你好').status_code, 400)
+        self.assertEqual(self.check_in('boot-3').json['display']['title'], 'Today')
+        self.assertEqual(self.settings(title='x' * 41).status_code, 400)
+        self.assertEqual(self.settings(label_0='', value_0='orphaned value').status_code, 400)
+        self.assertEqual(self.client.post('/devices/test-screen/settings', data={'title': 'Bad'}).status_code, 400)
+
+    def test_display_boundaries(self):
+        valid = {'title': 't' * 40, 'status': 's' * 24, 'rows': [{'label': 'l' * 20, 'value': 'v' * 48}] * 6}
+        self.assertEqual(validate_display(valid), valid)
+        for bad in ({'title': '', 'status': 'Ready', 'rows': []},
+                    dict(valid, rows=valid['rows'] + [valid['rows'][0]]),
+                    dict(valid, status='New\nline'), dict(valid, title='\x7f'),
+                    dict(valid, rows=[{'label': 'a', 'value': 'v' * 49}])):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_display(bad)
+
+    def test_maintenance_missing_unknown_and_success_clears_fault(self):
+        self.check_in()
+        self.report(failures=['fault'], alarm_confirmed=True, time_trusted=True,
+                    next_run=(self.now + timedelta(hours=1)).isoformat())
+        self.assertEqual(health(self.device(), self.now)[0], 'fault')
+        self.now += timedelta(hours=1, minutes=11)
+        self.assertEqual(health(self.device(), self.now)[0], 'missing')
+        self.check_in('debug-boot')
+        self.report('debug-boot', debug_hold=True, shutdown={'status': 'debug', 'source': 'local'}, failures=[])
+        self.now += timedelta(days=1)
+        self.assertEqual(health(self.device(), self.now)[0], 'maintenance')
+        self.check_in('healthy-boot')
+        self.report('healthy-boot', failures=[], alarm_confirmed=True, time_trusted=True,
+                    next_run=(self.now + timedelta(hours=1)).isoformat(), shutdown_intent='poweroff')
+        self.assertEqual(health(self.device(), self.now)[0], 'healthy')
+        self.check_in('untrusted')
+        self.report('untrusted', failures=[], alarm_confirmed=True, time_trusted=False,
+                    next_run=(self.now + timedelta(hours=1)).isoformat())
+        self.assertEqual(health(self.device(), self.now)[0], 'unknown')
+
+    def test_database_persists_configuration_and_history_across_restart(self):
+        self.login()
+        self.settings(debug='on')
+        self.check_in()
+        self.report(failures=['retained'])
+        second = create_app(self.config)
+        client = second.test_client()
+        response = client.post('/api/v1/check-in', json={'device_id': 'test-screen', 'event_id': 'boot-2',
+                                                       'started_at': self.now.isoformat()}, headers=self.auth)
+        self.assertIs(response.json['debug'], True)
+        self.assertEqual(response.json['content_version'], 2)
+        with second.app_context():
+            self.assertEqual(get_db().execute("SELECT COUNT(*) FROM events WHERE phase='final'").fetchone()[0], 1)
+
+    def test_retention_deletes_history_but_keeps_device_configuration(self):
+        self.check_in()
+        self.report(failures=['retained current snapshot'])
+        self.now += timedelta(days=31)
+        self.assertEqual(self.client.get('/healthz').status_code, 200)
+        with self.app.app_context():
+            self.assertEqual(get_db().execute('SELECT COUNT(*) FROM events').fetchone()[0], 0)
+        self.assertEqual(self.device()['payload']['failures'], ['retained current snapshot'])
+        self.check_in('current-boot')
+        self.check_in('boot-1')
+        self.assertEqual(self.device()['latest_event_id'], 'current-boot')
+
+    def test_dashboard_and_history_render_metrics_and_escaped_content(self):
+        self.check_in()
+        self.report(failures=[{'stage': 'display', 'message': '<script>bad</script>'}],
+                    metrics={'values': {'battery_percent': 71, 'wifi_rssi': -48}},
+                    shutdown={'status': 'requesting'}, shutdown_intent='poweroff', content_version=1)
+        self.login()
+        response = self.client.get('/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'71%', response.data)
+        self.assertIn(b'-48 dBm', response.data)
+        self.assertNotIn(b'<script>bad</script>', response.data)
+        self.assertIn(b'actual power-off is not confirmed', response.data)
+        history = self.client.get('/devices/test-screen/history')
+        self.assertEqual(history.status_code, 200)
+        self.assertIn(b'boot-1', history.data)
+        self.assertEqual(self.client.get('/devices/unknown/history').status_code, 404)
+        self.assertEqual(self.client.get('/devices/test-screen/history?page=-1').status_code, 400)
+
+    def test_session_cookie_security_tracks_management_url(self):
+        response = self.client.get('/login')
+        self.assertNotIn('Secure;', response.headers['Set-Cookie'])
+        self.assertIn('HttpOnly', response.headers['Set-Cookie'])
+        self.assertIn('SameSite=Lax', response.headers['Set-Cookie'])
+        secure_app = create_app(dict(self.config, BASE_URL='https://paper.example.com'))
+        secure_response = secure_app.test_client().get('/login', base_url='https://paper.example.com')
+        self.assertIn('Secure;', secure_response.headers['Set-Cookie'])
+        self.assertEqual(secure_response.headers['X-Frame-Options'], 'DENY')
+        self.assertIn('max-age', secure_response.headers['Strict-Transport-Security'])
+
+    def test_non_ascii_credentials_are_rejected_without_server_error(self):
+        token = self.csrf()
+        self.assertEqual(self.client.post('/login', data={'csrf_token': token, 'username': '用户',
+                                                        'password': 'incorrect'}).status_code, 401)
+        self.assertEqual(self.client.post('/login', data={'csrf_token': '字符', 'username': 'owner',
+                                                        'password': 'incorrect'}).status_code, 400)
+
+    def test_actual_scheduler_report_shape_is_accepted_and_visible(self):
+        self.check_in(time_trusted=True, local_debug=False, previous={})
+        response = self.report(started_at=self.now.isoformat(), finished_at=self.now.isoformat(),
+            time_trusted=True, alarm_confirmed=True, next_run=(self.now + timedelta(hours=1)).isoformat(),
+            metrics={'display_returncode': 0, 'values': {'battery_percent': 83.4, 'battery_voltage': 4.1, 'temperature': 41.0,
+                                'wifi_rssi': -49}}, server={'status': 'connected', 'latency_ms': 7.3},
+            display={'status': 'ok'}, failures=[], debug_hold=False, shutdown_intent='poweroff',
+            shutdown={'status': 'requesting'}, content_version=1)
+        self.assertEqual(response.status_code, 200)
+        self.login()
+        dashboard = self.client.get('/')
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertIn(b'7.3 ms', dashboard.data)
+        self.assertIn(b'83.4%', dashboard.data)
+        self.assertIn(b'<dt>Display result</dt><dd>ok</dd>', dashboard.data)
+
+    def test_display_result_falls_back_to_metrics_returncode(self):
+        self.check_in()
+        self.report(metrics={'display_returncode': 0, 'values': {}}, failures=[])
+        self.login()
+        dashboard = self.client.get('/')
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertIn(b'<dt>Display result</dt><dd>0</dd>', dashboard.data)
+
+    def test_missing_metrics_use_dash_without_units_and_battery_falls_back(self):
+        self.check_in('missing-metrics')
+        self.report('missing-metrics', metrics={'values': {'battery_percent': None, 'wifi_rssi': None}})
+        self.login()
+        dashboard = self.client.get('/')
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertIn('<dt>Battery</dt><dd>—</dd>'.encode(), dashboard.data)
+        self.assertIn('<dt>Wi-Fi signal</dt><dd>—</dd>'.encode(), dashboard.data)
+        self.assertNotIn(b'None', dashboard.data)
+        self.check_in('fallback-battery')
+        self.report('fallback-battery', battery_percent=0,
+                    metrics={'values': {'battery_percent': None, 'wifi_rssi': 0}})
+        dashboard = self.client.get('/')
+        self.assertIn(b'<dt>Battery</dt><dd>0%</dd>', dashboard.data)
+        self.assertIn(b'<dt>Wi-Fi signal</dt><dd>0 dBm</dd>', dashboard.data)
+
+    def test_extreme_future_wakeup_cannot_overflow_dashboard(self):
+        self.check_in()
+        self.assertEqual(self.report(alarm_confirmed=True, time_trusted=True,
+                                     next_run='9999-12-31T23:59:59+00:00').status_code, 200)
+        self.login()
+        self.assertEqual(self.client.get('/').status_code, 200)
+
+    def test_surrogate_strings_and_dictionary_keys_are_rejected(self):
+        self.check_in()
+        self.assertEqual(self.report(failures=['bad \ud800']).status_code, 400)
+        self.assertEqual(self.report(metrics={'values': {'\ud800': 42}}).status_code, 400)
+        self.assertEqual(self.report(failures=['Valid Unicode: 温度']).status_code, 200)
+        self.login()
+        self.assertEqual(self.client.get('/').status_code, 200)
+
+    def test_missing_secrets_fail_closed(self):
+        for changes in ({'SECRET_KEY': ''}, {'DEVICE_TOKEN': 'short'}, {'ADMIN_PASSWORD_HASH': 'plaintext'}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                create_app(dict(self.config, **changes))
+
+
+if __name__ == '__main__':
+    unittest.main()

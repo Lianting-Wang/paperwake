@@ -1,10 +1,10 @@
 # Pi Zero 2 电子纸项目
 
-Pi Zero 2、PiSugar 3 和 IT8951 电子纸组成的周期刷新状态屏。PiSugar 唤醒树莓派后，系统采集指标、刷新屏幕、安排下一次唤醒，然后关机。`pisched` 是开机执行一次的程序；DEBUG 模式下不会自行循环刷新。
+Pi Zero 2、PiSugar 3 和 IT8951 电子纸组成的周期刷新状态屏。PiSugar 唤醒树莓派后，系统向常驻 server 报到、下载显示内容与本轮 debug，采集指标、刷新屏幕、安排下一次唤醒、上报结果，然后关机。`pisched` 是开机执行一次的程序；DEBUG 模式下不会自行循环刷新。本地 DEBUG 始终有效；远程 debug 只作用于本轮，断网时不会使用缓存留机。
 
 电池运行允许闹钟设置失败后关机；失败通知应有次数和总时限，耗尽预算后仍关机。调度器已提供有界通知接口和统一失败收尾，通知命令默认留空；配置及未来电子纸错误状态见 [失败处理约定](docs/failure-handling.md)。
 
-本目录包含项目的源码、配置、构建环境和设备维护工具。
+本目录包含项目源码、配置、构建环境和设备维护工具。常驻服务提供管理员登录、内容编辑、远程 debug、指标历史及失联标记；Docker 与本机启动步骤见 [服务指南](docs/server.md)。设备直接访问 IP+端口，网页可经现有域名 HTTPS 反向代理。
 
 ## 目录
 
@@ -12,6 +12,7 @@ Pi Zero 2、PiSugar 3 和 IT8951 电子纸组成的周期刷新状态屏。PiSug
 src/
   scheduler/pisched.py       开机调度
   tasks/collect_metrics.py   指标采集与屏幕刷新
+  server/                   Flask 管理网页、设备 API、SQLite
   display/IT8951/            单页界面和 Waveshare 驱动
 config/                     日常时间表示例、半小时测试配置
 deploy/                     systemd 服务和设备启动配置参考
@@ -29,9 +30,11 @@ build/                      编译产物和待审阅发布包，只保存在本�
 
 ## 本地开始
 
-离线检查只需要 Python 3.9 以上、Bash 和 Make，不需要连接树莓派：
+完整离线检查需要 Python 3.10 以上、Bash、Make 及服务端依赖，不需要连接树莓派：
 
 ```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r src/server/requirements.txt
 make check
 make preview CONFIG=config/daytime.example.json
 # 修改 C 时另用本机 Clang/GCC 做无硬件内存与超时检查
@@ -61,6 +64,7 @@ make release CONFIG=config/local.json
 
 - [项目代理维护指引](AGENT.md)
 - [架构与文件部署关系](docs/architecture.md)
+- [常驻服务与管理网页](docs/server.md)
 - [配置和刷新时间表](docs/configuration.md)
 - [构建、备份、安装和恢复](docs/maintenance.md)
 - [已知问题及后续工作](docs/known-issues.md)

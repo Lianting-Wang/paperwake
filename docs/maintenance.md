@@ -36,7 +36,7 @@ make snapshot HOST=pi
 
 结果保存于 `backups/device/UTC时间戳/`，包括：
 
-- `rootfs/`：调度器、任务、配置、systemd unit、启动配置、显示源码及设备上的 `epd`、日志和 CSV。
+- `rootfs/`：调度器、任务、配置、systemd unit、启动配置、显示源码及设备上的 `epd`、日志和指标。
 - `manifest.json`：每个文件的远端路径与 SHA-256，以及设备时间、系统、服务状态和启动统计。
 
 脚本通过 `sudo -n` 只读取指定路径（含 root 所有的状态文件），不获取 `.ssh`、PiSugar Web 密码配置或其他账号数据。单个文件超过 8 MiB 会跳过并返回非零退出码；后续日志变大时应单独归档。该快照是项目级备份，不是整张 SD 卡镜像，也不包含网络凭据、全部系统包或系统还原能力。
@@ -68,6 +68,7 @@ sudo mkdir -p /boot/firmware/DEBUG
 sudo install -d /opt/pisched /etc/pisched /var/log/pisched /var/lib/pisched /home/wlt/IT8951
 sudo install -m 0755 rootfs/opt/pisched/pisched.py /opt/pisched/pisched.py
 sudo install -m 0755 rootfs/opt/pisched/collect_metrics.py /opt/pisched/collect_metrics.py
+sudo install -m 0644 rootfs/opt/pisched/server_client.py /opt/pisched/server_client.py
 sudo install -m 0644 rootfs/etc/pisched/config.json /etc/pisched/config.json
 sudo install -m 0644 rootfs/etc/systemd/system/pisched.service /etc/systemd/system/pisched.service
 sudo cp -R rootfs/home/wlt/IT8951/lib rootfs/home/wlt/IT8951/singlepage /home/wlt/IT8951/
@@ -75,6 +76,8 @@ sudo install -m 0644 rootfs/home/wlt/IT8951/Makefile /home/wlt/IT8951/Makefile
 sudo install -m 0755 rootfs/home/wlt/IT8951/epd /home/wlt/IT8951/epd
 sudo systemctl daemon-reload
 ```
+
+设备 token 需单独安装至配置的 `server.token_file`（root:root、0600），与 server 注册的 token 一致；发布包不含凭据。先确认 server 已运行及设备地址可达，服务设置见 [常驻服务](server.md)。
 
 以上不自动启动服务。验证时可手动执行 `sudo systemctl start pisched.service`；这会运行真实采集、刷新和 RTC 命令，DEBUG 只跳过最后的关机。它不是无副作用的检查。
 
@@ -85,7 +88,7 @@ systemctl status pisched.service --no-pager
 journalctl -u pisched.service -n 50 --no-pager
 tail -n 50 /var/log/pisched/pisched.log
 tail -n 30 /var/log/pisched/epd.log
-tail -n 5 /var/log/pisched/network_metrics.csv
+sudo cat /var/lib/pisched/state.json
 ```
 
 确认 PiSugar 服务正常、闹钟设置与读回正确，并安排完整唤醒测试后，再删除 DEBUG。现有目录形式的标记可用 `sudo rmdir /boot/firmware/DEBUG` 删除；同时检查 `/boot/DEBUG`。服务已在现有设备启用，新设备如需启用应单独执行 `sudo systemctl enable pisched.service`。仓库工具不自动移除 DEBUG 或请求关机。

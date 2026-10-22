@@ -1,60 +1,38 @@
 # 架构与部署关系
 
-设备由 Pi Zero 2、PiSugar 3 和 IT8951 电子纸组成。2026 年 10 月 22 日设备运行 Debian 13.2 ARM64，屏幕日志报告 1872×1404、VCOM −1.56 V、显示模式 1。当前源码使用 `BCM` 后端，链接 bcm2835 1.60。
+设备为 Pi Zero 2、PiSugar 3、IT8951（1872×1404，VCOM −1.56 V，模式 1），运行 Debian 13 ARM64。NAS/本机常驻服务负责接收报告、存储历史、维护 debug 和显示内容；设备仍是开机执行一次的 oneshot。
 
-## 一次唤醒的流程
+## 一轮数据流
 
-```mermaid
-flowchart TD
-    A[PiSugar RTC 唤醒] --> B[树莓派开机]
-    B --> C[启动 PiSugar 服务与 pisched]
-    C --> D[有界等待 PiSugar，就绪后优先确认 NTP]
-    D --> E[写回并校验 RTC，或仅用可信 RTC 恢复]
-    E --> F[执行采集和电子纸任务]
-    F --> G[设置并校验下一次 RTC 闹钟]
-    G --> K[保存状态，失败时有界通知及可选错误展示]
-    K --> H{存在 DEBUG 标记}
-    H -->|是| I[保持开机]
-    H -->|否| J[系统关机与 PiSugar 电源处理]
-    J --> A
-```
+1. 有界等待 PiSugar，读取电量，NTP 优先校时并核对 RTC。
+2. 向配置中的数字 IP 和端口报到，取得本轮 remote debug 与固定格式内容。获取不到则保留屏幕原画面、跳过任务。
+3. 内容有效时，采集本地电池、电压、温度和 Wi-Fi，记录本次 HTTP 耗时，刷新电子纸。无 CSV 或 ping 采集。
+4. 设置、读回核验下一次 RTC 闹钟；汇总错误并执行可选通知/错误展示。
+5. 把关机意图、闹钟、指标和错误原子加入本地报告队列；有连接且非低电量时，在统一报告期限内发送队列。
+6. 保存状态，按本地 DEBUG 或本轮远程 debug 决定留机，否则安全关机。正常关机后由 RTC 再次唤醒。
 
-`pisched.service` 是 `Type=oneshot`，不是定时器。每次开机会立即执行任务，然后选择严格晚于当前时刻的下一个计划时间。服务执行完显示 `inactive (dead)` 是正常现象。DEBUG 保持开机后，下一次刷新需要手动触发或重新开机；RTC 闹钟不等同于操作系统中的周期任务。
+server 无法通过关机意图证明实际断电；实际关机请求结果在下次报到的 previous 摘要中传递。关机请求自身失败会另外排队 outcome 报告。无法上传的报告留在本地，下次成功报到后补传，旧报告不得覆盖新周期状态。
 
-任务执行结束后，调度器设置并校验下一次 RTC 闹钟。
+## 文件和接口
 
-电池运行的目标是所有路径在预算内结束并请求关机，包括闹钟设置失败；失败先记录，并通过预留接口做有次数和总时限的通知。DEBUG 为显式维护例外。统一收尾与通知接口已实现，systemd 对崩溃和总超时提供独立关机兜底；详见 [失败处理约定](failure-handling.md)。
+| 仓库 | 设备路径/作用 |
+| --- | --- |
+| `src/scheduler/pisched.py` | `/opt/pisched/pisched.py`：周期、时钟、闹钟、失败收尾 |
+| `src/scheduler/server_client.py` | `/opt/pisched/server_client.py`：有界 HTTP、内容校验、持久报告队列 |
+| `src/tasks/collect_metrics.py` | `/opt/pisched/collect_metrics.py`：本地指标和一次屏幕刷新 |
+| `config/*.json` | 显式选定后部署到 `/etc/pisched/config.json` |
+| `deploy/systemd/pisched.service` | `/etc/systemd/system/pisched.service` |
+| `build/display/epd` | 默认 `/home/wlt/IT8951/epd` |
+| `src/server/` | Flask + Gunicorn + SQLite 管理服务，见 [服务指南](server.md) |
 
-## 文件映射
+设备 token 位于配置的独立文件，不进入配置环境、日志或 Git。发布包不含 token，安装时单独写入并限制为 root 可读。
 
-| 仓库文件 | 树莓派位置 | 说明 |
-| --- | --- | --- |
-| `src/scheduler/pisched.py` | `/opt/pisched/pisched.py` | 调度主程序 |
-| `src/tasks/collect_metrics.py` | `/opt/pisched/collect_metrics.py` | 指标采集和刷新任务 |
-| 选定的 `config/*.json` | `/etc/pisched/config.json` | 部署时明确选择 |
-| `deploy/systemd/pisched.service` | `/etc/systemd/system/pisched.service` | 有限期限与失败关机兜底 |
-| 构建的 `build/display/epd` | `/home/wlt/IT8951/epd` | 默认安装路径，可配置 display.path |
-| `deploy/boot/config.pi-zero2.txt` | `/boot/firmware/config.txt` | Pi Zero 2 配置参考，不随发布包安装 |
+采集任务通过环境读取已校验配置、事件 ID、页面及 HTTP 耗时。显示进程消费相同一份电池样本，并通过 `PISCHED_PAGE_TITLE`、`PISCHED_PAGE_STATUS`、`PISCHED_PAGE_LABEL_1..6`、`PISCHED_PAGE_VALUE_1..6` 读取内容。C 在硬件初始化/清屏之前验证 ASCII 与长度；内容无效不刷新。
 
-PiSugar 服务由系统安装包管理：`pisugar-server.service` 提供 Unix socket；`pisugar-poweroff.service` 在关机流程中运行 `/usr/bin/pisugar-poweroff`。本项目的发布包仅安装应用文件，PiSugar 的 unit 和参数通过系统包管理。
+## 留机与兜底
 
-## 数据流
+本地 `/boot/DEBUG`、`/boot/firmware/DEBUG` 优先；server 的 false 不能关闭本地维护。本轮成功取得 true 后，后续失败仍可留机，但不从磁盘恢复远程 debug。下次运行必须重新联网获取。
 
-采集程序从调度器环境读取已校验配置，独立读取电量、电压、温度、Wi-Fi 和 ping；单项失败记为缺失值，仍写 CSV 和刷新页面。socket、网络目标、接口和显示路径都来自同一份配置。CSV 使用 UTC 带偏移时间，指标原子保存到 metrics_file。日志及 CSV 在应用内按 1 MiB、4 份备份轮换。
+有错误且本轮远程 debug 生效时返回 10，systemd 的 `SuccessExitStatus=10` 允许完成的维护周期留机；错误仍完整保存在状态与报告。崩溃、信号和 300 秒总超时不属于该退出状态，无本地 DEBUG 时仍触发独立关机兜底。DEBUG 留机后不轮询、不循环刷新，网页更改在下一轮执行时生效。
 
-电子纸程序通过 PISCHED_BATTERY 消费同一份电池样本；没有样本则显示 N/A。SNAPSHOT 为页面样本标签，不代表调度闭环成功。调度器将匹配本轮事件的指标、失败、通知和关机请求结果保存在 state_file，未来错误页面可通过 failure_display 接口读取。
-
-日志位置：
-
-- `/var/log/pisched/pisched.log`：调度步骤、任务结果、闹钟校验。
-- `/var/log/pisched/epd.log`：电子纸程序输出。
-- `journalctl -u pisched.service`：systemd 收集的标准输出。
-- `journalctl -u pisugar-server.service`：PiSugar 服务日志。
-
-## 显示程序
-
-`singlepage/main.c` 固定 VCOM 为 1560 mV、模式为 1，初始化屏幕、清屏、调用 `SinglePage_Show()`、休眠并等待 5 秒后释放硬件资源。程序入口为 `main(void)`，运行时不需要命令行参数。
-
-`singlepage/page.c` 使用 4 bit 灰度帧缓冲、内置字库和相对屏幕尺寸的布局，绘制设备信息、时间、电池和固定状态。中文字符串使用原厂字库对应的字节编码，增加中文内容时不能直接假定任意 UTF-8 文本都可显示。
-
-Makefile 编译 `singlepage/` 和 `lib/` 中的驱动、绘图与字库代码，生成 `epd`。
+日志仍在 `/var/log/pisched/pisched.log` 和 `epd.log`，每份按 1 MiB、4 个备份轮换。指标与周期状态在 `/var/lib/pisched/` 原子保存。PiSugar 的 package-managed unit、启动配置与电源参数不随应用发布覆盖。

@@ -1,6 +1,7 @@
 # Working configuration, snapshots, logs and build output.
 /config/local.json
 /config/*.local.json
+/config/*.local.env
 /backups/
 /build/
 /data/runtime/

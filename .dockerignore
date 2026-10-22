@@ -3,3 +3,8 @@
 !docker/**
 !vendor/
 !vendor/bcm2835-1.60.tar.gz
+!src/
+!src/server/
+!src/server/**
+src/server/**/__pycache__/
+src/server/**/*.pyc

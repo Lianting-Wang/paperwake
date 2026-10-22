@@ -13,6 +13,7 @@ def load_config(path):
 
 def load_scheduler():
     """Import definitions only; pisched's guarded main() is never invoked."""
+    sys.path.insert(0, str(ROOT / 'src/scheduler'))
     spec = importlib.util.spec_from_file_location('epaper_pisched', ROOT / 'src/scheduler/pisched.py')
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

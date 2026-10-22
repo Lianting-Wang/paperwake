@@ -11,9 +11,10 @@
 | 路径 | 职责 |
 | --- | --- |
 | `src/scheduler/pisched.py` | 开机任务、时间同步、下一次 RTC 闹钟和关机流程 |
-| `src/tasks/collect_metrics.py` | 电池及网络指标采集、CSV 写入、电子纸刷新 |
+| `src/tasks/collect_metrics.py` | 电池及 Wi-Fi 指标采集、server 内容电子纸刷新 |
 | `src/display/IT8951/singlepage/` | 屏幕初始化、布局和显示内容 |
 | `src/display/IT8951/lib/` | Waveshare 驱动、绘图和字库 |
+| `src/server/` | 常驻管理网页、设备 API、SQLite 历史 |
 | `config/` | 可共享的配置模板；`local.json` 为本机配置 |
 | `deploy/` | systemd 服务和启动配置参考 |
 | `scripts/`、`tests/` | 维护工具与离线验证 |
@@ -62,7 +63,7 @@ make release CONFIG=config/local.json
 
 直接运行调度器或启动 `pisched.service` 会采集数据、刷新屏幕、修改 RTC，并可能关机。DEBUG 只跳过最后的关机，不会阻止其他设备操作。不要将这些命令用于无副作用的检查。
 
-当前有人值守的 RTC 排查保留 DEBUG；DEBUG 是显式维护例外，不是电池运行的失败保护。正常电池运行按失败处理约定在预算内收尾并关机，即使下次唤醒无法保证。部署、恢复及有人值守的唤醒验证按 [设备维护流程](docs/maintenance.md) 执行。应用发布不自动覆盖启动配置或 PiSugar 包管理的 unit。
+维护部署默认保留本地 DEBUG；完成授权测试后可使用本轮 server debug 留机。远程标志不能从上一轮状态恢复；它不保护崩溃/总超时，systemd 兜底只检查本地 DEBUG。DEBUG 是显式维护例外，不是电池运行的失败保护。正常电池运行按失败处理约定在预算内收尾并关机，即使下次唤醒无法保证。部署、恢复及有人值守的唤醒验证按 [设备维护流程](docs/maintenance.md) 执行。应用发布不自动覆盖启动配置或 PiSugar 包管理的 unit。
 
 ## 完成任务
 

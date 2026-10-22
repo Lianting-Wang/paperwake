@@ -32,5 +32,13 @@
   "failure_display": {
     "command": [],
     "timeout_sec": 10
+  },
+  "network": {
+    "interface": "wlan0"
+  },
+  "server": {
+    "base_url": "http://192.168.76.71:8088",
+    "device_id": "epaper-pi-zero2",
+    "token_file": "/etc/pisched/device.token"
   }
 }

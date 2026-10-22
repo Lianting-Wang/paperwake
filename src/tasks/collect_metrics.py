@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Collect independent measurements and render even when the network is unavailable."""
-import csv
+"""Collect local measurements and render validated server content once."""
 from datetime import datetime, timezone
 import json
 import math
@@ -9,14 +8,11 @@ from pathlib import Path
 import re
 import sys
 
-# The release installs this beside pisched.py; source runs use the scheduler folder.
 source_modules = Path(__file__).resolve().parents[1] / 'scheduler'
 if source_modules.is_dir():
     sys.path.insert(0, str(source_modules))
 from pisched import Budget, PiSugarClient, atomic_json, run_command, validate_config, rotate_log
-
-COLUMNS = ['timestamp', 'battery_percent', 'battery_voltage', 'temperature',
-           'wifi_rssi', 'ping_loss', 'ping_avg_latency']
+from server_client import validate_display
 
 
 def numeric(value, low, high):
@@ -33,17 +29,10 @@ def parse_wifi(output):
     return numeric(match[1], -150, 0)
 
 
-def parse_ping(output):
-    loss = re.search(r'(\d+(?:\.\d+)?)% packet loss', output)
-    rtt = re.search(r'(?:rtt|round-trip)[^=]*=\s*[\d.]+/([\d.]+)/', output)
-    return (numeric(loss[1], 0, 100) if loss else None,
-            numeric(rtt[1], 0, 60000) if rtt else None)
-
-
 def collect(cfg, event_id):
     budget = Budget(cfg['task']['timeout_sec'])
-    data = {'event_id': event_id, 'timestamp': datetime.now(timezone.utc).isoformat(),
-            'values': {}, 'failures': []}
+    data = {'schema_version': 2, 'event_id': event_id,
+            'timestamp': datetime.now(timezone.utc).isoformat(), 'values': {}, 'failures': []}
     values = data['values']
     def fail(stage, exc):
         data['failures'].append({'stage': stage, 'message': str(exc)[:300]})
@@ -64,38 +53,21 @@ def collect(cfg, event_id):
     except Exception as exc:
         values['wifi_rssi'] = None
         fail('wifi', exc)
-    values.update(ping_loss=None, ping_avg_latency=None)
     try:
-        network = cfg['network']
-        result = run_command(['ping', '-n', '-c', str(network['ping_count']), '-i', '0.2', '-W', '1',
-                              '-w', str(network['ping_timeout_sec']), network['target']],
-                             min(network['ping_timeout_sec'] + 1, budget.remaining()),
-                             env=dict(os.environ, LC_ALL='C'))
-        values['ping_loss'], values['ping_avg_latency'] = parse_ping(result.output)
-        if result.returncode or values['ping_loss'] is None or values['ping_avg_latency'] is None:
-            fail('ping', 'measurement unavailable or packet loss prevented RTT measurement')
-    except Exception as exc:
-        fail('ping', exc)
+        values['http_latency_ms'] = numeric(os.environ['PISCHED_HTTP_LATENCY_MS'], 0, 60000)
+    except (KeyError, ValueError) as exc:
+        values['http_latency_ms'] = None
+        fail('http_latency', exc)
     log_dir = Path(cfg['log_file']).parent
     try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        path = log_dir / 'network_metrics.csv'
-        rotate_log(path)
-        empty = not path.exists() or path.stat().st_size == 0
-        with path.open('a', newline='') as handle:
-            writer = csv.writer(handle)
-            if empty:
-                writer.writerow(COLUMNS)
-            # UTC with offset prevents duplicate/ambiguous timestamps during DST changes.
-            writer.writerow([data['timestamp']] + [values.get(key) if values.get(key) is not None else 'NaN'
-                                                  for key in COLUMNS[1:]])
-            handle.flush()
-            os.fsync(handle.fileno())
-    except OSError as exc:
-        fail('csv', exc)
-    # The renderer uses this exact battery sample, not a second socket query.
-    env = dict(os.environ, PISCHED_BATTERY='' if values['battery_percent'] is None else str(values['battery_percent']))
-    try:
+        page = validate_display(json.loads(os.environ['PISCHED_PAGE']))
+        # Clear inherited row variables; the server supplies this entire page.
+        env = {key: value for key, value in os.environ.items() if not key.startswith('PISCHED_PAGE_')}
+        env.update(PISCHED_BATTERY='' if values['battery_percent'] is None else str(values['battery_percent']),
+                   PISCHED_PAGE_TITLE=page['title'], PISCHED_PAGE_STATUS=page['status'], TZ=cfg['timezone'])
+        for index, row in enumerate(page['rows'], 1):
+            env[f'PISCHED_PAGE_LABEL_{index}'] = row['label']
+            env[f'PISCHED_PAGE_VALUE_{index}'] = row['value']
         result = run_command([cfg['display']['path']], min(cfg['display']['timeout_sec'], budget.remaining()), env=env)
         data['display_returncode'] = result.returncode
         if result.returncode:

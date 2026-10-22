@@ -1,0 +1,3 @@
+{% extends 'base.html' %}
+{% block title %}Sign in · E-paper control{% endblock %}
+{% block content %}<section class="login"><p class="eyebrow">YOUR DEVICE, AT A GLANCE</p><h1>A quiet place<br>to stay connected.</h1><p class="muted">Sign in to manage the screen and see how your device is doing.</p><form method="post" class="panel login-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Username<input name="username" autocomplete="username" required autofocus></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button class="primary">Sign in <span>↗</span></button></form></section>{% endblock %}

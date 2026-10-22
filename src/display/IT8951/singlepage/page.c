@@ -3,43 +3,96 @@
 #include "../lib/Config/Debug.h"
 #include "../lib/GUI/GUI_Paint.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <math.h>
 
 #define PAGE_WHITE      0xF0
 #define PAGE_BLACK      0x00
 #define PAGE_MID_GRAY   0xC0
 #define PAGE_LIGHT_GRAY 0xD0
 #define PAGE_DARK_GRAY  0x80
-
-#define CN_HELLO "\xC4\xE3\xBA\xC3"
-#define CN_RPI   "\xCA\xF7\xDD\xAE\xC5\xC9"
-
+#define PAGE_ROWS       6
+#define VALUE_COLUMNS   40
 
 extern UBYTE isColor;
+extern char **environ;
 
-static UWORD MinUword(UWORD a, UWORD b)
+typedef struct {
+    const char *title;
+    const char *status;
+    const char *labels[PAGE_ROWS];
+    const char *values[PAGE_ROWS];
+    unsigned int row_count;
+} PageContent;
+
+static bool ValidText(const char *value, size_t limit, bool allow_empty)
 {
-    return (a < b) ? a : b;
+    size_t length;
+    if(value == NULL) return false;
+    length = strnlen(value, limit + 1);
+    if(length > limit || (!allow_empty && length == 0)) return false;
+    for(size_t i = 0; i < length; i++) {
+        if((unsigned char)value[i] < 0x20 || (unsigned char)value[i] > 0x7e) return false;
+    }
+    return true;
 }
 
-static UWORD MaxUword(UWORD a, UWORD b)
+static bool ReadContent(PageContent *content)
 {
-    return (a > b) ? a : b;
+    const char *title = getenv("PISCHED_PAGE_TITLE");
+    const char *status = getenv("PISCHED_PAGE_STATUS");
+    bool supplied = title != NULL || status != NULL;
+    char key[32];
+    const char *labels[PAGE_ROWS];
+    const char *values[PAGE_ROWS];
+
+    /* Reject unsupported row indices instead of silently dropping a seventh row. */
+    for(char **entry = environ; entry != NULL && *entry != NULL; entry++) {
+        const char *index = NULL;
+        if(strncmp(*entry, "PISCHED_PAGE_LABEL_", 19) == 0) index = *entry + 19;
+        if(strncmp(*entry, "PISCHED_PAGE_VALUE_", 19) == 0) index = *entry + 19;
+        if(index != NULL && !(index[0] >= '1' && index[0] <= '6' && index[1] == '=')) return false;
+    }
+    for(unsigned int i = 0; i < PAGE_ROWS; i++) {
+        snprintf(key, sizeof(key), "PISCHED_PAGE_LABEL_%u", i + 1);
+        labels[i] = getenv(key);
+        snprintf(key, sizeof(key), "PISCHED_PAGE_VALUE_%u", i + 1);
+        values[i] = getenv(key);
+        supplied = supplied || labels[i] != NULL || values[i] != NULL;
+    }
+    memset(content, 0, sizeof(*content));
+    if(!supplied) {
+        content->title = "PI STATUS";
+        content->status = "SNAPSHOT";
+        content->labels[0] = "DEVICE";
+        content->values[0] = "PI ZERO2";
+        content->labels[1] = "PANEL";
+        content->values[1] = "1872x1404";
+        content->row_count = 2;
+        return true;
+    }
+    if(!ValidText(title, 40, false) || !ValidText(status, 24, false)) return false;
+    content->title = title;
+    content->status = status;
+    for(unsigned int i = 0; i < PAGE_ROWS; i++) {
+        if(labels[i] == NULL && values[i] == NULL) continue;
+        if(!ValidText(labels[i], 20, false) || !ValidText(values[i], 48, true)) return false;
+        content->labels[content->row_count] = labels[i];
+        content->values[content->row_count] = values[i];
+        content->row_count++;
+    }
+    return true;
 }
 
-static UWORD ClampUword(UWORD value, UWORD min_value, UWORD max_value)
+UBYTE SinglePage_ValidateContent(void)
 {
-    if(value < min_value) {
-        return min_value;
-    }
-    if(value > max_value) {
-        return max_value;
-    }
-    return value;
+    PageContent content;
+    if(ReadContent(&content)) return 0;
+    Debug("Invalid page content; display left unchanged\r\n");
+    return 1;
 }
 
 static void FillBox(UWORD x0, UWORD y0, UWORD x1, UWORD y1, UWORD fill_color)
@@ -53,7 +106,7 @@ static bool ReadBatteryValue(char *buffer, size_t buffer_size)
     const char *value = getenv("PISCHED_BATTERY");
     char *end;
     double percent;
-    if(buffer == NULL || buffer_size == 0 || value == NULL || *value == 0) return false;
+    if(value == NULL || *value == 0) return false;
     percent = strtod(value, &end);
     if(*end != 0 || !isfinite(percent) || percent < 0 || percent > 100) return false;
     snprintf(buffer, buffer_size, "%.1f%%", percent);
@@ -62,95 +115,73 @@ static bool ReadBatteryValue(char *buffer, size_t buffer_size)
 
 static void FormatCurrentTime(char *buffer, size_t buffer_size)
 {
-    time_t now;
+    time_t now = time(NULL);
     struct tm local_tm;
-
-    if(buffer == NULL || buffer_size == 0) {
-        return;
-    }
-
-    now = time(NULL);
     if(localtime_r(&now, &local_tm) == NULL) {
         snprintf(buffer, buffer_size, "N/A");
         return;
     }
-
     strftime(buffer, buffer_size, "%Y-%m-%d %H:%M", &local_tm);
 }
 
-static void DrawInfoCard(UWORD x0, UWORD y0, UWORD x1, UWORD y1, UWORD padding, const char *title, const char *value)
+static void DrawInfoCard(UWORD x0, UWORD y0, UWORD x1, UWORD y1, const char *title, const char *value)
 {
-    UWORD divider_y;
-    UWORD value_y;
-
+    const UWORD padding = 40;
     FillBox(x0, y0, x1, y1, PAGE_LIGHT_GRAY);
-    Paint_DrawString_EN(x0 + padding, y0 + padding, title, &Font20, PAGE_BLACK, PAGE_LIGHT_GRAY);
+    Paint_DrawString_EN(x0 + padding, y0 + padding, title, &Font16, PAGE_BLACK, PAGE_LIGHT_GRAY);
+    Paint_DrawLine(x0 + padding, y0 + 70, x1 - padding, y0 + 70, PAGE_DARK_GRAY, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+    Paint_DrawString_EN(x0 + padding, y0 + 100, value, &Font20, PAGE_BLACK, PAGE_LIGHT_GRAY);
+}
 
-    divider_y = y0 + padding + Font20.Height + 10;
-    Paint_DrawLine(x0 + padding, divider_y, x1 - padding, divider_y, PAGE_DARK_GRAY, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
-
-    value_y = divider_y + padding;
-    Paint_DrawString_EN(x0 + padding, value_y, value, &Font20, PAGE_BLACK, PAGE_LIGHT_GRAY);
+static void DrawValue(UWORD x, UWORD y, const char *value)
+{
+    char line[VALUE_COLUMNS + 1];
+    size_t remaining = strlen(value);
+    /* Explicit wrapping stays inside each row. Paint's automatic wrapping uses
+       the entire panel and can otherwise overwrite another region. */
+    while(remaining > 0) {
+        size_t length = remaining > VALUE_COLUMNS ? VALUE_COLUMNS : remaining;
+        memcpy(line, value, length);
+        line[length] = 0;
+        Paint_DrawString_EN(x, y, line, &Font20, PAGE_BLACK, PAGE_WHITE);
+        value += length;
+        remaining -= length;
+        y += Font20.Height + 6;
+    }
 }
 
 static void SinglePage_SetDisplayMode(int mode)
 {
     isColor = 0;
-
-    if(mode == 3) {
-        Paint_SetRotate(ROTATE_0);
-        Paint_SetMirroring(MIRROR_NONE);
-        isColor = 1;
-    } else if(mode == 2) {
-        Paint_SetRotate(ROTATE_0);
-        Paint_SetMirroring(MIRROR_HORIZONTAL);
-    } else if(mode == 1) {
-        Paint_SetRotate(ROTATE_0);
-        Paint_SetMirroring(MIRROR_HORIZONTAL);
-    } else {
-        Paint_SetRotate(ROTATE_0);
-        Paint_SetMirroring(MIRROR_NONE);
-    }
+    Paint_SetRotate(ROTATE_0);
+    Paint_SetMirroring((mode == 1 || mode == 2) ? MIRROR_HORIZONTAL : MIRROR_NONE);
+    if(mode == 3) isColor = 1;
 }
 
 UBYTE SinglePage_Show(UWORD panel_width, UWORD panel_height, UDOUBLE target_memory_addr, bool four_byte_align, int display_mode)
 {
-    UWORD render_width;
+    PageContent content;
+    UWORD render_width = four_byte_align ? (panel_width - (panel_width % 32)) : panel_width;
+    const UWORD margin = 50;
+    const UWORD header_height = 180;
+    const UWORD content_top = 230;
+    const UWORD content_bottom = 1244;
+    const UWORD footer_y = 1294;
+    UWORD right_width;
+    UWORD left_width;
+    UWORD right_x;
     UDOUBLE image_size;
     UBYTE *frame_buffer;
-    UWORD smallest_edge;
-    UWORD margin;
-    UWORD header_height;
-    UWORD footer_height;
-    UWORD content_top;
-    UWORD content_bottom;
-    UWORD content_height;
-    UWORD inner_width;
-    UWORD column_gap;
-    UWORD left_width;
-    UWORD right_width;
-    UWORD left_x;
-    UWORD right_x;
-    UWORD left_y;
-    UWORD left_bottom;
-    UWORD text_x;
-    UWORD text_y;
-    UWORD line_gap;
-    UWORD card_gap;
-    UWORD card_height;
-    UWORD card_y;
-    UWORD footer_y;
-    char text[64];
     char current_time[32];
     char battery_value[32];
 
-    render_width = four_byte_align ? (panel_width - (panel_width % 32)) : panel_width;
-    if(render_width == 0 || panel_height == 0) {
-        Debug("Invalid panel geometry\r\n");
+    /* This page is designed for the installed 10.3-inch panel, including its
+       optional 32-pixel transfer alignment. Reject geometry before drawing. */
+    if(panel_width != 1872 || panel_height != 1404 || !ReadContent(&content)) {
+        Debug("Invalid panel geometry or page content\r\n");
         return 1;
     }
-
-    image_size = ((render_width * 4 % 8 == 0) ? (render_width * 4 / 8) : (render_width * 4 / 8 + 1)) * panel_height;
+    image_size = (UDOUBLE)(render_width / 2) * panel_height;
     frame_buffer = (UBYTE *)malloc(image_size);
     if(frame_buffer == NULL) {
         Debug("Failed to allocate single page frame buffer\r\n");
@@ -162,87 +193,32 @@ UBYTE SinglePage_Show(UWORD panel_width, UWORD panel_height, UDOUBLE target_memo
     SinglePage_SetDisplayMode(display_mode);
     Paint_SetBitsPerPixel(4);
     Paint_Clear(PAGE_WHITE);
-
     FormatCurrentTime(current_time, sizeof(current_time));
-    if(!ReadBatteryValue(battery_value, sizeof(battery_value))) {
-        snprintf(battery_value, sizeof(battery_value), "N/A");
-    }
+    if(!ReadBatteryValue(battery_value, sizeof(battery_value))) snprintf(battery_value, sizeof(battery_value), "N/A");
 
-    smallest_edge = MinUword(render_width, panel_height);
-    margin = ClampUword(smallest_edge / 28, 18, 56);
-    header_height = ClampUword(panel_height / 7, 80, 180);
-    footer_height = ClampUword(panel_height / 11, 48, 110);
-    content_top = header_height + margin;
-    content_bottom = panel_height - footer_height - margin;
-    if(content_bottom <= content_top + 1) {
-        free(frame_buffer);
-        return 1;
-    }
-
-    content_height = content_bottom - content_top;
-    inner_width = render_width - (margin * 2);
-    column_gap = margin;
-    right_width = inner_width / 3;
-    left_width = inner_width - right_width - column_gap;
-    left_x = margin;
-    right_x = left_x + left_width + column_gap;
-    left_y = content_top;
-    left_bottom = content_bottom - 1;
+    right_width = (render_width - 2 * margin) / 3;
+    left_width = render_width - 3 * margin - right_width;
+    right_x = 2 * margin + left_width;
 
     FillBox(0, 0, render_width - 1, header_height - 1, PAGE_MID_GRAY);
-    Paint_DrawString_CN(margin, margin + 2, CN_RPI, &Font24CN, PAGE_BLACK, PAGE_MID_GRAY);
-    Paint_DrawString_EN(margin + Font24CN.Width * 3 + margin / 2, margin + 4, "PI STATUS", &Font20, PAGE_BLACK, PAGE_MID_GRAY);
-    Paint_DrawString_CN(render_width - margin - (Font24CN.Width * 2), margin + 2, CN_HELLO, &Font24CN, PAGE_BLACK, PAGE_MID_GRAY);
+    Paint_DrawString_EN(margin, 68, content.title, &Font20, PAGE_BLACK, PAGE_MID_GRAY);
+    Paint_DrawString_EN(margin, 110, "DEVICE SNAPSHOT", &Font16, PAGE_BLACK, PAGE_MID_GRAY);
     Paint_DrawLine(0, header_height, render_width - 1, header_height, PAGE_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
 
-    FillBox(left_x, left_y, left_x + left_width - 1, left_bottom, PAGE_WHITE);
+    FillBox(margin, content_top, margin + left_width - 1, content_bottom - 1, PAGE_WHITE);
+    for(unsigned int i = 0; i < content.row_count; i++) {
+        UWORD y = content_top + 40 + i * 155;
+        Paint_DrawString_EN(margin + 40, y, content.labels[i], &Font16, PAGE_BLACK, PAGE_WHITE);
+        DrawValue(margin + 40, y + 28, content.values[i]);
+    }
 
-    text_x = left_x + margin;
-    text_y = left_y + margin;
-    line_gap = MaxUword(Font16.Height + margin / 2, 26);
+    DrawInfoCard(right_x, content_top, render_width - margin - 1, 551, "TIME", current_time);
+    DrawInfoCard(right_x, 576, render_width - margin - 1, 897, "BATTERY", battery_value);
+    DrawInfoCard(right_x, 922, render_width - margin - 1, content_bottom - 1, "STATUS", content.status);
 
-    Paint_DrawString_EN(text_x, text_y, "SYSTEM", &Font20, PAGE_BLACK, PAGE_WHITE);
-    text_y += Font20.Height + margin;
-
-    Paint_DrawString_EN(text_x, text_y, "DEVICE: PI ZERO2", &Font16, PAGE_BLACK, PAGE_WHITE);
-    text_y += line_gap;
-
-    snprintf(text, sizeof(text), "PANEL: %ux%u", (unsigned int)panel_width, (unsigned int)panel_height);
-    Paint_DrawString_EN(text_x, text_y, text, &Font16, PAGE_BLACK, PAGE_WHITE);
-    text_y += line_gap;
-
-    snprintf(text, sizeof(text), "MODE: %d", display_mode);
-    Paint_DrawString_EN(text_x, text_y, text, &Font16, PAGE_BLACK, PAGE_WHITE);
-    text_y += line_gap;
-
-    Paint_DrawString_EN(text_x, text_y, "VCOM: -1.56V", &Font16, PAGE_BLACK, PAGE_WHITE);
-    text_y += line_gap;
-
-    Paint_DrawString_EN(text_x, text_y, "STATUS: SNAPSHOT", &Font16, PAGE_BLACK, PAGE_WHITE);
-    text_y += line_gap + margin / 2;
-
-    Paint_DrawString_CN(text_x, text_y, CN_HELLO, &Font24CN, PAGE_BLACK, PAGE_WHITE);
-    Paint_DrawString_CN(text_x + Font24CN.Width * 2 + margin / 2, text_y, CN_RPI, &Font24CN, PAGE_BLACK, PAGE_WHITE);
-
-    card_gap = MaxUword(margin / 2, 14);
-    card_height = (content_height - (card_gap * 2)) / 3;
-    card_y = left_y;
-
-    DrawInfoCard(right_x, card_y, right_x + right_width - 1, card_y + card_height - 1, margin, "TIME", current_time);
-
-    card_y += card_height + card_gap;
-    DrawInfoCard(right_x, card_y, right_x + right_width - 1, card_y + card_height - 1, margin, "BATTERY", battery_value);
-
-    card_y += card_height + card_gap;
-    DrawInfoCard(right_x, card_y, right_x + right_width - 1, card_y + card_height - 1, margin, "STATUS", "SNAPSHOT");
-
-    footer_y = panel_height - footer_height;
     Paint_DrawLine(margin, footer_y, render_width - margin, footer_y, PAGE_BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
-    Paint_DrawString_EN(margin, footer_y + margin / 2, "PI STATUS", &Font16, PAGE_BLACK, PAGE_WHITE);
-    Paint_DrawString_CN(render_width - margin - (Font24CN.Width * 4), footer_y + margin / 4, "\xCE\xA2\xD1\xA9\xB5\xE7\xD7\xD3", &Font24CN, PAGE_BLACK, PAGE_WHITE);
-
+    Paint_DrawString_EN(margin, footer_y + 25, "PI STATUS", &Font16, PAGE_BLACK, PAGE_WHITE);
     EPD_IT8951_4bp_Refresh(frame_buffer, 0, 0, render_width, panel_height, false, target_memory_addr, false);
-
     free(frame_buffer);
     return EPD_IT8951_HasError() ? 1 : 0;
 }

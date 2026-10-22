@@ -216,7 +216,7 @@ class CycleTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         folder = Path(self.temp.name)
         self.cfg = s.validate_config({'schedule': ['08:00'], 'state_file': str(folder/'state.json'),
-                                     'metrics_file': str(folder/'metrics.json'), 'log_file': str(folder/'run.log')})
+                                     'metrics_file': str(folder/'metrics.json'), 'outbox_file': str(folder/'outbox.json'), 'log_file': str(folder/'run.log')})
 
     def effects(self):
         stack = ExitStack()
@@ -226,6 +226,12 @@ class CycleTests(unittest.TestCase):
             mocks[name] = stack.enter_context(patch.object(s, name))
         mocks['client'] = stack.enter_context(patch.object(s, 'PiSugarClient'))
         mocks['client'].return_value.get.return_value = '55'
+        mocks['server'] = stack.enter_context(patch.object(s, 'ServerClient'))
+        mocks['server'].return_value.check_in.return_value = {'debug': False, 'content_version': 1,
+            'display': {'title': 'PI STATUS', 'status': 'READY', 'rows': []}}
+        mocks['server'].return_value.last_latency_ms = 4
+        mocks['server'].return_value.cfg = self.cfg['server']
+        mocks['server'].return_value.report.return_value = {'accepted': True}
         mocks['task'] = stack.enter_context(patch.object(s, 'run_task', return_value=0))
         mocks['shutdown'] = stack.enter_context(patch.object(s, 'request_shutdown', return_value={'status':'requested'}))
         # No notification or display command may reach the OS from cycle tests.
@@ -460,3 +466,108 @@ class LongDSTAlarmTests(unittest.TestCase):
             s.program_alarm(cfg,client,state)
         self.assertTrue(state['alarm_confirmed'])
         self.assertEqual(state['alarm_repeat'],2)  # Monday UTC; skip Sunday entirely.
+
+
+class ServerCycleTests(unittest.TestCase):
+    setUp = CycleTests.setUp
+    effects = CycleTests.effects
+
+    def test_unreachable_server_skips_display_and_shuts_down(self):
+        effects = self.effects()
+        effects['server'].return_value.check_in.side_effect = RuntimeError('connection refused')
+        s.run_cycle(self.cfg)
+        effects['task'].assert_not_called()
+        effects['shutdown'].assert_called_once()
+        self.assertFalse(s.read_json(self.cfg['state_file'])['remote_debug'])
+
+    def test_remote_debug_survives_invalid_content_and_report_failure(self):
+        effects = self.effects()
+        effects['server'].return_value.check_in.return_value = {'debug': True, 'content_version': 1,
+            'display': {'title': 'invalid\n', 'status': 'READY', 'rows': []}}
+        effects['server'].return_value.report.side_effect = RuntimeError('disconnected')
+        # Exercise real policy rather than the shutdown substitute.
+        effects['shutdown'].side_effect = lambda cfg, state, budget: (
+            {'status': 'debug', 'source': 'remote'} if state['remote_debug'] else {'status': 'requested'})
+        self.assertEqual(s.run_cycle(self.cfg), 10)
+        effects['task'].assert_not_called()
+        state = s.read_json(self.cfg['state_file'])
+        self.assertTrue(state['remote_debug'])
+        self.assertEqual(state['shutdown']['source'], 'remote')
+        self.assertIn('server_report', [f['stage'] for f in state['failures']])
+
+    def test_previous_remote_debug_is_never_restored(self):
+        s.atomic_json(self.cfg['state_file'], {'remote_debug': True})
+        effects = self.effects()
+        effects['server'].return_value.check_in.side_effect = RuntimeError('offline')
+        s.run_cycle(self.cfg)
+        self.assertFalse(s.read_json(self.cfg['state_file'])['remote_debug'])
+
+    def test_remote_policy_does_not_execute_shutdown(self):
+        with patch.object(s.os.path, 'exists', return_value=False), patch.object(s, 'run_command') as run:
+            self.assertEqual(s.request_shutdown(self.cfg, {'remote_debug': True}, s.Budget(10))['source'], 'remote')
+        run.assert_not_called()
+
+    def test_report_includes_alarm_and_hold_intent(self):
+        effects = self.effects()
+        effects['server'].return_value.check_in.return_value['debug'] = True
+        effects['program_alarm'].side_effect = lambda cfg, client, state: state.update(
+            next_run='2026-10-23T08:00:00-04:00', alarm_confirmed=True)
+        s.run_cycle(self.cfg)
+        report = effects['server'].return_value.report.call_args.args[0]
+        self.assertTrue(report['alarm_confirmed'])
+        self.assertTrue(report['debug_hold'])
+        self.assertEqual(report['shutdown_intent'], 'hold')
+
+    def test_systemd_accepts_only_completed_debug_cycle_code(self):
+        unit = (Path(__file__).resolve().parents[1] / 'deploy/systemd/pisched.service').read_text()
+        self.assertIn('SuccessExitStatus=10', unit)
+        self.assertIn('SERVICE_RESULT', unit)
+        self.assertNotIn('/run/remote', unit)
+
+
+    def test_upload_error_is_durably_queued_as_outcome(self):
+        effects = self.effects()
+        from server_client import ServerError
+        effects['server'].return_value.report.side_effect = ServerError('lost ACK')
+        s.run_cycle(self.cfg)
+        outbox = s.ReportOutbox(self.cfg['outbox_file'])
+        outcomes = [r for r in outbox.reports if r.get('phase') == 'outcome']
+        self.assertEqual(len(outcomes), 1)
+        self.assertIn('server_report', [f['stage'] for f in outcomes[0]['failures']])
+
+    def test_disconnected_cycle_skips_failure_display_hook(self):
+        effects = self.effects()
+        self.cfg['failure_display']['command'] = ['/test/display']
+        effects['server'].return_value.check_in.side_effect = RuntimeError('offline')
+        s.run_cycle(self.cfg)
+        effects['command'].assert_not_called()
+
+    def test_task_cannot_consume_alarm_reserve(self):
+        effects = self.effects()
+        clock = [0.0]
+        def task(command, timeout, *args):
+            clock[0] += timeout
+            return 124
+        effects['task'].side_effect = task
+        remaining = []
+        effects['program_alarm'].side_effect = lambda cfg, client, state: remaining.append(effects['client'].call_args.args[1].remaining())
+        with patch.object(s.time, 'monotonic', side_effect=lambda: clock[0]):
+            s.run_cycle(self.cfg)
+        self.assertGreaterEqual(remaining[0], s.ALARM_RESERVE_SECONDS)
+
+
+    def test_corrupt_outbox_preserved_but_live_fault_reported(self):
+        Path(self.cfg['outbox_file']).write_text('{broken')
+        effects = self.effects()
+        s.run_cycle(self.cfg)
+        self.assertEqual(Path(self.cfg['outbox_file']).read_text(), '{broken')
+        report = effects['server'].return_value.report.call_args.args[0]
+        self.assertIn('outbox', [f['stage'] for f in report['failures']])
+
+
+    def test_unwritable_outbox_still_reports_live_fault(self):
+        effects = self.effects()
+        with patch.object(s.ReportOutbox, '_save', side_effect=OSError('disk full')):
+            s.run_cycle(self.cfg)
+        report = effects['server'].return_value.report.call_args.args[0]
+        self.assertIn('outbox', [f['stage'] for f in report['failures']])
