@@ -1,0 +1,22 @@
+{
+  "schedule": [
+    "08:00",
+    "12:00",
+    "16:00",
+    "18:00"
+  ],
+  "repeat_mask": 127,
+  "pisugar": {
+    "uds_path": "/tmp/pisugar-server.sock",
+    "timeout_sec": 2
+  },
+  "task": {
+    "command": "/usr/local/bin/my_test_task.sh",
+    "timeout_sec": 120
+  },
+  "shutdown": {
+    "command": "/sbin/shutdown -h now",
+    "shutdown_even_if_alarm_set_failed": false
+  },
+  "log_file": "/var/log/pisched/pisched.log"
+}

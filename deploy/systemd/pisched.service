@@ -1,0 +1,11 @@
+[Unit]
+Description=PiSugar scheduler (run task, set next RTC alarm, shutdown)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/pisched/pisched.py /etc/pisched/config.json
+
+[Install]
+WantedBy=multi-user.target

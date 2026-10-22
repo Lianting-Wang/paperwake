@@ -1,0 +1,11 @@
+services:
+  display-build:
+    image: epaper-build:debian13-arm64
+    platform: linux/arm64
+    network_mode: none
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      - .:/workspace:ro
+      - ./build/display:/out

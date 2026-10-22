@@ -1,0 +1,24 @@
+# Working configuration, snapshots, logs and build output.
+/config/local.json
+/config/*.local.json
+/backups/
+/build/
+/data/runtime/
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+.env
+.env.*
+!.env.example
+.ssh/
+.codex/
+.aws/
+
+# Hardware binaries must be built, not committed.
+*.o
+*.a
+*.so
+/src/display/IT8951/bin/
+/src/display/IT8951/epd

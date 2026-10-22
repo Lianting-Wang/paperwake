@@ -1,0 +1,47 @@
+# --- 基础引导与性能设置 ---
+arm_64bit=1
+arm_boost=1
+# 启动前10秒开启涡轮加速，加快内核加载，随后恢复正常频率省电
+initial_turbo=10
+
+# --- 开启必要接口 ---
+# IT8951 墨水屏必须使用 SPI
+dtparam=spi=on
+# PiSugar3 通讯和部分墨水屏功能可能需要 I2C
+dtparam=i2c_arm=on
+# 开启串口，方便在断网时排查问题
+enable_uart=1
+
+# --- 极致精简：禁用视频与音频 (省电核心) ---
+# 彻底禁用 HDMI 编码器，不加载图形驱动
+dtoverlay=vc4-kms-v3d,nohdmi
+max_framebuffers=0
+# 禁用音频
+dtparam=audio=off
+# 禁用复合视频输出
+enable_tvout=0
+
+# --- 禁用自动探测 (提速核心) ---
+# 禁用摄像头和显示器自动检测（能省下好几秒的 I2C 等待时间）
+camera_auto_detect=0
+display_auto_detect=0
+# 禁用 initramfs 自动加载 (如果你的系统不需要它)
+auto_initramfs=0
+# 禁用各种硬件探测
+hdmi_ignore_edid=0xa5000080
+hdmi_ignore_cec=1
+force_eeprom_read=0
+ignore_lcd=1
+disable_poe_fan=1
+
+# --- 禁用 USB 控制器 ---
+# 既然不需要任何 USB 设备，直接关闭控制器可显著降低待机电流
+dtoverlay=dwc2,dr_mode=peripheral
+
+# --- 状态灯优化 ---
+# 关掉 LED 进一步省电
+#dtparam=act_led_trigger=none
+#dtparam=act_led_activelow=on
+
+[all]
+# 确保所有设置在所有模式下生效
