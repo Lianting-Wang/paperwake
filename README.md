@@ -38,7 +38,7 @@ make preview CONFIG=config/daytime.example.json
 make check-display
 ```
 
-`daytime.example.json` 暂用 **08:00、12:00、16:00、18:00** 演示日常运行。它是可编辑的示例，尚未作为正式时间表启用。`test-half-hour.json` 保留每半小时一次的测试频率。实际部署前复制选定配置为 `config/local.json` 并调整；本机配置不提交 Git。时间按树莓派的时区解释，当前设备为 `America/New_York`。
+`daytime.example.json` 暂用 **08:00、12:00、16:00、18:00** 演示日常运行。它是可编辑的示例，尚未作为正式时间表启用。`test-half-hour.json` 保留每半小时一次的测试频率。实际部署前复制选定配置为 `config/local.json` 并调整；本机配置不提交 Git。时间表按配置的 `timezone` 解释，当前配置与设备时区均为 `America/New_York`。
 
 构建显示程序需要 Docker 和 Docker Compose。镜像使用 ARM64 Debian 13，与设备系统大版本对齐：
 

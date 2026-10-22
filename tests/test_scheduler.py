@@ -62,6 +62,30 @@ class ScheduleTests(unittest.TestCase):
                 s.program_alarm(cfg, client, state)
 
 
+    def test_shutdown_margin_uses_elapsed_seconds_across_fall_back(self):
+        zone = ZoneInfo('America/New_York')
+        cases = [
+            (datetime(2026, 11, 1, 1, 59, 30, tzinfo=zone, fold=0), '02:00',
+             datetime(2026, 11, 1, 2, 0, tzinfo=zone), 127),
+            (datetime(2026, 11, 1, 1, 0, 30, tzinfo=zone, fold=1), '01:30',
+             datetime(2026, 11, 2, 1, 30, tzinfo=zone), 2),
+        ]
+        for now, slot, expected, repeat in cases:
+            with self.subTest(now=now.isoformat()):
+                class Clock(datetime):
+                    @classmethod
+                    def now(cls, tz=None):
+                        return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+                cfg = s.validate_config({'schedule': [slot]})
+                client = Mock()
+                client.get.side_effect = [expected.isoformat(), str(repeat), 'true']
+                state = {'time_trusted': True}
+                with patch.object(s, 'datetime', Clock), patch.object(s, 'rtc_datetime', return_value=now):
+                    s.program_alarm(cfg, client, state)
+                self.assertEqual(state['next_run'], expected.isoformat())
+                self.assertTrue(state['alarm_confirmed'])
+
+
 class ConfigTests(unittest.TestCase):
     def test_boolean_string_and_unbounded_task_rejected_by_runtime(self):
         for raw in ({'shutdown': {'shutdown_even_if_alarm_set_failed': 'false'}},
@@ -239,6 +263,41 @@ class CycleTests(unittest.TestCase):
              patch.object(s, 'notify_failure', side_effect=RuntimeError('notification broke')):
             self.assertEqual(s.run_cycle(self.cfg), 1)
         mocks['shutdown'].assert_called_once()
+
+    def test_cycle_timestamps_follow_trusted_clock_and_include_cleanup(self):
+        mocks = self.effects()
+        elapsed = [0.0]
+        corrected = [False]
+        trusted_start = datetime(2026, 10, 22, 9, 0, tzinfo=timezone.utc)
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                start = trusted_start if corrected[0] else trusted_start - timedelta(minutes=3)
+                value = start + timedelta(seconds=elapsed[0])
+                return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+        def prepare(cfg, client, state, previous, budget):
+            elapsed[0] = 8
+            corrected[0] = True
+            state.update(time_trusted=True, time_source='ntp')
+        def task(*args, **kwargs):
+            elapsed[0] = 11
+            return 0
+        def notify(*args):
+            elapsed[0] = 14
+            return {'status': 'not_needed', 'attempts': 0}
+        def shutdown(*args):
+            elapsed[0] = 15
+            return {'status': 'requested'}
+        mocks['prepare_time'].side_effect = prepare
+        mocks['task'].side_effect = task
+        mocks['shutdown'].side_effect = shutdown
+        with patch.object(s, 'datetime', Clock), patch.object(s.time, 'monotonic', side_effect=lambda: elapsed[0]), \
+             patch.object(s, 'notify_failure', side_effect=notify):
+            self.assertEqual(s.run_cycle(self.cfg), 0)
+        state = s.read_json(self.cfg['state_file'])
+        self.assertEqual(datetime.fromisoformat(state['started_at']), trusted_start)
+        self.assertEqual(datetime.fromisoformat(state['finished_at']), trusted_start + timedelta(seconds=15))
+        self.assertEqual(state['elapsed_seconds'], 15)
 
     def test_low_battery_skips_task(self):
         mocks = self.effects()

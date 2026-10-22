@@ -59,7 +59,7 @@ make release CONFIG=config/local.json
 
 ## 安装到设备
 
-当前设备有 RTC 异常，有人值守的部署验证期间保留 DEBUG。正常电池运行允许失败后关机，通知重试耗尽后也应关机；DEBUG 是维护例外，不能作为日常电池运行的故障策略，详见 [失败处理约定](failure-handling.md)。本次策略更新不自动修改设备或移除其 DEBUG。
+维护部署期间保留 DEBUG；RTC 日期已修正，但 PiSugar 仍出现可由重试恢复的瞬时 I/O 错误。正常电池运行允许失败后关机，通知重试耗尽后也应关机；DEBUG 是维护例外，不能作为日常电池运行的故障策略，详见 [失败处理约定](failure-handling.md)。应用安装不会自动移除设备的 DEBUG。
 
 需要设备备份时先使用 snapshot，再将选定发布目录复制到设备的临时目录，例如 `/home/wlt/epaper-release/`。核对 `release.json` 和其中 `rootfs/etc/pisched/config.json` 的内容。然后在树莓派上，从发布目录执行：
 
@@ -88,7 +88,17 @@ tail -n 30 /var/log/pisched/epd.log
 tail -n 5 /var/log/pisched/network_metrics.csv
 ```
 
-确认 PiSugar 服务正常、闹钟设置与读回正确，并安排有人值守的完整唤醒测试后，再考虑删除 DEBUG。现有目录形式的标记可用 `sudo rmdir /boot/firmware/DEBUG` 删除；同时检查 `/boot/DEBUG`。服务已在现有设备启用，新设备如需启用应单独执行 `sudo systemctl enable pisched.service`。本次不提供自动移除 DEBUG 或自动关机脚本。
+确认 PiSugar 服务正常、闹钟设置与读回正确，并安排完整唤醒测试后，再删除 DEBUG。现有目录形式的标记可用 `sudo rmdir /boot/firmware/DEBUG` 删除；同时检查 `/boot/DEBUG`。服务已在现有设备启用，新设备如需启用应单独执行 `sudo systemctl enable pisched.service`。仓库工具不自动移除 DEBUG 或请求关机。
+
+## 授权的关机与唤醒验证
+
+一次性测试采用隔离配置，不覆盖日常时间表。先核对 PiSugar RTC 与可信系统时间一致，选择能覆盖本轮任务及关机余量的短间隔闹钟，验证时间、repeat 和 enabled。关机前记录 boot_id、单调时钟运行时间与期望唤醒时间；按授权退出 DEBUG 后执行真实周期。
+
+为便于测试后排查，可临时设置一个在下次开机、`pisched.service` 之前创建 DEBUG 的 oneshot 服务，并通过 Requires/After 确保顺序。只启用，不在当前开机启动；恢复脚本应检查 boot_id 已改变，并保存恢复回执。测试结束后保留证据，移除临时服务和依赖，再核对正常服务状态与时间表。
+
+故障测试可先通过正常 PiSugar 通道预置独立恢复闹钟，再给隔离周期提供不存在的 socket、失败任务及会超时的本地通知命令。这能验证失败后仍关机，同时保留测试恢复能力；不能据此声称真实闹钟损坏时仍能唤醒。通知探针不使用外部消息服务。
+
+重新上线后核对 boot_id 已改变，并用运行时长推算开机时间是否吻合闹钟；校时前的系统日期可能来自旧的 fake-hwclock，不宜单独作为唤醒时间证据。检查每轮状态、通知次数与耗时、关机请求和开机任务。SSH 离线及新启动证明功能闭环，精确断电电压与待机功耗仍需现场仪器测量。当前设备 journal 未持久化，上一轮 systemd 日志可能不可用。
 
 发布包不覆盖 `/boot/firmware/config.txt`、PiSugar 包管理的 unit 或电源选项。`deploy/boot/` 仅是当前 Pi Zero 2 配置参考，不能直接套用到其他板卡。
 

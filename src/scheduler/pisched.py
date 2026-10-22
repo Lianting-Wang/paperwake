@@ -407,7 +407,10 @@ def program_alarm(cfg, client, state):
         raise RuntimeError('RTC clock is not synchronized')
     now = datetime.now(ZoneInfo(cfg['timezone']))
     margin = timedelta(seconds=cfg['runtime']['shutdown_margin_seconds'])
-    next_dt = compute_next_run(datetime.fromtimestamp((now + margin).timestamp(), now.tzinfo), cfg['schedule'])
+    # ZoneInfo wall-clock addition can cross a repeated hour or reset fold=1.
+    # The shutdown margin is elapsed time, independent of DST clock changes.
+    earliest = datetime.fromtimestamp(now.timestamp() + margin.total_seconds(), now.tzinfo)
+    next_dt = compute_next_run(earliest, cfg['schedule'])
     state['next_run'] = next_dt.isoformat()
     # A daily UTC alarm can ring a day early across a 25h DST interval, or when
     # skipping a nonexistent wall time. Restrict only those long spans to the
@@ -491,6 +494,14 @@ def run_cycle(cfg, initial_error=None):
         if state['failures']:
             state['last_failure'] = {key: state[key] for key in ('event_id', 'started_at', 'failures', 'notification')}
         state['recovered'] = not state['failures'] and bool(state.get('last_failure'))
+    def refresh_timing():
+        finished = datetime.now(timezone.utc)
+        elapsed = time.monotonic() - (overall.deadline - cfg['runtime']['max_seconds'])
+        state['finished_at'] = finished.isoformat()
+        state['elapsed_seconds'] = round(elapsed, 3)
+        if state['time_trusted']:
+            # Early boot wall time may be stale until NTP/RTC corrects it.
+            state['started_at'] = (finished - timedelta(seconds=elapsed)).isoformat()
     def save():
         refresh_summary()
         try:
@@ -544,7 +555,7 @@ def run_cycle(cfg, initial_error=None):
     except Exception as exc:
         failure('cycle', exc)
     finally:
-        state['finished_at'] = datetime.now(timezone.utc).isoformat()
+        refresh_timing()
         state['last_failure'] = previous.get('last_failure')
         save()
         try:
@@ -587,7 +598,7 @@ def run_cycle(cfg, initial_error=None):
                 except Exception as exc:
                     state['notification'] = {'status': 'failed', 'attempts': 0}
                     failure('notification', exc)
-        state['elapsed_seconds'] = round(cfg['runtime']['max_seconds'] - overall.remaining(), 3)
+        refresh_timing()
         save()
         log(f"Cycle finished failures={len(state['failures'])} notification={state['notification']['status']} shutdown={state['shutdown']['status']} elapsed={state['elapsed_seconds']}s", cfg['log_file'])
     return 1 if state['failures'] else 0
