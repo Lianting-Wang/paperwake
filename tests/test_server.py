@@ -1,11 +1,14 @@
 """Real SQLite and HTTP test-client coverage; no device hardware side effects."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
 import sys
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.server import create_app, get_db, health, validate_display
@@ -342,6 +345,8 @@ class ServerTests(unittest.TestCase):
     def test_retention_deletes_history_but_keeps_device_configuration(self):
         self.check_in()
         self.report(failures=['retained current snapshot'])
+        self.login()
+        self.confirm_history(action='retention', retention_days='30')
         self.now += timedelta(days=31)
         self.assertEqual(self.client.get('/healthz').status_code, 200)
         with self.app.app_context():
@@ -350,6 +355,156 @@ class ServerTests(unittest.TestCase):
         self.check_in('current-boot')
         self.check_in('boot-1')
         self.assertEqual(self.device()['latest_event_id'], 'current-boot')
+
+    def history_action(self, **fields):
+        fields['csrf_token'] = self.csrf()
+        return self.client.post('/devices/test-screen/history/manage', data=fields)
+
+    def confirm_history(self, **fields):
+        preview = self.history_action(**fields)
+        self.assertEqual(preview.status_code, 200)
+        token = re.search(rb'name="confirmation_token" value="([^"]+)"', preview.data)[1].decode()
+        return self.history_action(action='confirm', confirmation_token=token)
+
+    def test_history_is_permanent_by_default_and_upgrade(self):
+        self.check_in()
+        self.now += timedelta(days=400)
+        self.client.get('/healthz')
+        self.assertIsNone(self.device()['retention_days'])
+        with self.app.app_context():
+            self.assertEqual(get_db().execute('SELECT COUNT(*) FROM events').fetchone()[0], 1)
+            get_db().execute('ALTER TABLE devices DROP COLUMN retention_days')
+            get_db().commit()
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            upgrades = list(workers.map(lambda _: create_app(self.config), range(2)))
+        upgraded = upgrades[0]
+        upgraded.test_client().get('/healthz')
+        with upgraded.app_context():
+            self.assertIsNone(get_db().execute('SELECT retention_days FROM devices').fetchone()[0])
+            self.assertEqual(get_db().execute('SELECT COUNT(*) FROM events').fetchone()[0], 1)
+
+    def test_retention_preview_is_nonmutating_and_confirmed_policy_persists(self):
+        self.check_in('old')
+        self.now += timedelta(days=8)
+        self.check_in('current')
+        self.login()
+        preview = self.history_action(action='retention', retention_days='7')
+        self.assertEqual(preview.status_code, 200)
+        self.assertIsNone(self.device()['retention_days'])
+        with self.app.app_context():
+            self.assertEqual(get_db().execute('SELECT COUNT(*) FROM events').fetchone()[0], 2)
+        self.assertEqual(self.confirm_history(action='retention', retention_days='7').status_code, 302)
+        self.assertEqual(self.device()['retention_days'], 7)
+        restored = create_app(self.config)
+        with restored.app_context():
+            self.assertEqual(get_db().execute('SELECT retention_days FROM devices').fetchone()[0], 7)
+            self.assertEqual(get_db().execute('SELECT event_id FROM events').fetchone()[0], 'current')
+        for days in ('3', '15', '30', '42', 'forever'):
+            self.assertEqual(self.confirm_history(action='retention', retention_days=days).status_code, 302)
+            self.assertEqual(self.device()['retention_days'], None if days == 'forever' else int(days))
+        self.confirm_history(action='retention', retention_days='custom', custom_days='11')
+        self.assertEqual(self.device()['retention_days'], 11)
+
+    def test_delete_before_is_exclusive_and_preserves_current_state_and_dedup(self):
+        self.now = datetime(2026, 10, 20, 23, 59, 59, tzinfo=timezone.utc)
+        self.check_in('old')
+        self.report('old', failures=['diagnostic'])
+        self.now = datetime(2026, 10, 21, tzinfo=timezone.utc)
+        self.check_in('boundary')
+        self.report('boundary', failures=[])
+        self.login()
+        self.assertEqual(self.confirm_history(action='delete_before', before='2026-10-21').status_code, 302)
+        with self.app.app_context():
+            rows = get_db().execute('SELECT event_id FROM events').fetchall()
+            self.assertEqual([row[0] for row in rows], ['boundary', 'boundary'])
+        self.assertEqual(self.device()['latest_event_id'], 'boundary')
+        self.check_in('old')
+        self.report('old', failures=['replay'])
+        self.assertEqual(self.device()['latest_event_id'], 'boundary')
+        with self.app.app_context():
+            self.assertEqual(get_db().execute("SELECT COUNT(*) FROM events WHERE event_id='old'").fetchone()[0], 0)
+
+    def test_selected_deletion_is_scoped_to_preview_and_all_existing_phases(self):
+        self.check_in('one')
+        self.report('one', metrics={'values': {'battery_percent': 70}})
+        self.check_in('two')
+        self.login()
+        self.assertEqual(self.confirm_history(action='delete_selected', event_ids=['one']).status_code, 302)
+        with self.app.app_context():
+            self.assertEqual([row[0] for row in get_db().execute('SELECT event_id FROM events')], ['two'])
+        self.assertEqual(self.device()['latest_event_id'], 'two')
+
+    def test_history_management_requires_login_csrf_and_single_use_confirmation(self):
+        self.check_in()
+        self.assertEqual(self.history_action(action='retention', retention_days='7').status_code, 302)
+        self.login()
+        endpoint = '/devices/test-screen/history/manage'
+        self.assertEqual(self.client.post(endpoint, data={'action': 'delete_before', 'before': '2100-01-01'}).status_code, 400)
+        preview = self.history_action(action='delete_selected', event_ids=['boot-1'])
+        token = re.search(rb'name="confirmation_token" value="([^"]+)"', preview.data)[1].decode()
+        self.assertEqual(self.history_action(action='confirm', confirmation_token=token+'bad').status_code, 400)
+        self.assertEqual(self.history_action(action='confirm', confirmation_token=token).status_code, 302)
+        self.assertEqual(self.history_action(action='confirm', confirmation_token=token).status_code, 400)
+        for fields in ({'action': 'delete_before', 'before': '2026-02-30'},
+                       {'action': 'delete_before', 'before': '20261021'},
+                       {'action': 'retention', 'retention_days': '0'},
+                       {'action': 'retention', 'retention_days': '-7'},
+                       {'action': 'retention', 'retention_days': '36501'},
+                       {'action': 'delete_selected', 'event_ids': []},
+                       {'action': 'delete_selected', 'event_ids': ['bad id']}):
+            self.assertEqual(self.history_action(**fields).status_code, 400)
+
+    def test_delete_preview_excludes_later_reports_and_confirmation_expires(self):
+        self.check_in('old')
+        self.login()
+        preview = self.history_action(action='delete_before', before='2100-01-01')
+        token = re.search(rb'name="confirmation_token" value="([^"]+)"', preview.data)[1].decode()
+        self.now += timedelta(seconds=1)
+        self.check_in('new')
+        self.assertEqual(self.history_action(action='confirm', confirmation_token=token).status_code, 302)
+        with self.app.app_context():
+            self.assertEqual([row[0] for row in get_db().execute('SELECT event_id FROM events')], ['new'])
+        preview = self.history_action(action='delete_selected', event_ids=['new'])
+        token = re.search(rb'name="confirmation_token" value="([^"]+)"', preview.data)[1].decode()
+        with patch('itsdangerous.timed.TimestampSigner.get_timestamp', return_value=int(time.time()) + 601):
+            self.assertEqual(self.history_action(action='confirm', confirmation_token=token).status_code, 400)
+        with self.app.app_context():
+            self.assertEqual(get_db().execute('SELECT COUNT(*) FROM events').fetchone()[0], 1)
+
+    def test_history_charts_require_auth_and_use_one_sample_per_cycle(self):
+        path = '/devices/test-screen/history/data'
+        self.assertEqual(self.client.get(path).status_code, 302)
+        self.check_in(time_trusted=True, battery_percent=80)
+        self.report(metrics={'values': {'battery_percent': 79, 'battery_voltage': 4.1}}, elapsed_seconds=20)
+        self.login()
+        response = self.client.get(path+'?days=7')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['summary']['cycles'], 1)
+        self.assertEqual(response.json['summary']['reports'], 2)
+        self.assertEqual(response.json['series'][0]['battery_percent'], 79)
+        self.assertEqual(self.client.get(path+'?days=invalid').status_code, 400)
+        self.assertEqual(self.client.get('/devices/unknown/history/data').status_code, 404)
+
+    def test_cycle_details_and_charts_share_failure_definition(self):
+        self.check_in()
+        self.report(metrics={'failures': ['sensor unavailable']}, task={'status': 'failed'})
+        self.login()
+        response = self.client.get('/devices/test-screen/history')
+        self.assertIn('有异常'.encode(), response.data)
+        self.assertIn(b'sensor unavailable', response.data)
+        data = self.client.get('/devices/test-screen/history/data').json
+        self.assertEqual(data['summary']['failure_cycles'], 1)
+
+    def test_language_switch_on_confirmation_returns_to_history(self):
+        self.check_in()
+        self.login()
+        preview = self.history_action(action='delete_selected', event_ids=['boot-1'])
+        target = re.search(rb'name="next" value="([^"]+)"', preview.data)[1].decode()
+        self.assertEqual(target, '/devices/test-screen/history')
+        response = self.switch_language('en', target)
+        self.assertEqual(self.client.get(response.headers['Location']).status_code, 200)
+        with self.app.app_context():
+            self.assertEqual(get_db().execute('SELECT COUNT(*) FROM events').fetchone()[0], 1)
 
     def test_dashboard_and_history_render_metrics_and_escaped_content(self):
         self.check_in()

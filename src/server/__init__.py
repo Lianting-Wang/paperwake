@@ -13,10 +13,12 @@ import sqlite3
 from urllib.parse import urlsplit
 
 from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash
 
 from .i18n import LANGUAGE_COOKIE, LANGUAGES, get_language, t
+from .history import build_history_data, cycle_has_failures, merge_cycle
 
 DEFAULT_DISPLAY = {'title': 'E-PAPER', 'status': 'Ready', 'rows': [
     {'label': 'Device', 'value': 'Connected'}, {'label': 'Content', 'value': 'Edit in the control panel'}]}
@@ -115,6 +117,9 @@ def create_app(config=None):
     app.jinja_env.globals['t'] = t
     app.jinja_env.globals['style_version'] = hashlib.sha256(
         (Path(__file__).parent / 'static/style.css').read_bytes()).hexdigest()[:12]
+    def asset_version(name):
+        return hashlib.sha256((Path(__file__).parent / 'static' / name).read_bytes()).hexdigest()[:12]
+    app.jinja_env.globals['asset_version'] = asset_version
 
     @app.context_processor
     def language_context():
@@ -127,7 +132,7 @@ def create_app(config=None):
         DEVICE_ID=os.environ.get('DEVICE_ID', 'epaper-pi-zero2'),
         DEVICE_TOKEN=os.environ.get('DEVICE_TOKEN', ''),
         BASE_URL=os.environ.get('BASE_URL', 'http://192.168.76.109:8088'),
-        RETENTION_DAYS=30, NOW=utc_now,
+        NOW=utc_now,
         MAX_CONTENT_LENGTH=262144, MAX_FORM_MEMORY_SIZE=65536,
         SESSION_COOKIE_NAME='epaper_admin', SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax', PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
@@ -160,7 +165,7 @@ def create_app(config=None):
                 device_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL,
                 debug INTEGER NOT NULL DEFAULT 0, content_version INTEGER NOT NULL DEFAULT 1,
                 display_json TEXT NOT NULL, latest_event_id TEXT, last_seen_at TEXT,
-                latest_payload TEXT, latest_report_at TEXT
+                latest_payload TEXT, latest_report_at TEXT, retention_days INTEGER
             );
             CREATE TABLE IF NOT EXISTS events (
                 device_id TEXT NOT NULL REFERENCES devices(device_id), event_id TEXT NOT NULL,
@@ -173,7 +178,13 @@ def create_app(config=None):
                 phase TEXT NOT NULL, PRIMARY KEY(device_id,event_id,phase)
             );
             INSERT OR IGNORE INTO event_keys SELECT device_id,event_id,phase FROM events;
+            CREATE INDEX IF NOT EXISTS events_device_received ON events(device_id,received_at);
         ''')
+        # Multiple Gunicorn workers can start against the same existing database.
+        # Acquire the schema-write lock before checking whether the column exists.
+        db.execute('BEGIN IMMEDIATE')
+        if 'retention_days' not in {row['name'] for row in db.execute('PRAGMA table_info(devices)')}:
+            db.execute('ALTER TABLE devices ADD COLUMN retention_days INTEGER')
         db.execute('''INSERT INTO devices(device_id,token_hash,display_json) VALUES(?,?,?)
                       ON CONFLICT(device_id) DO UPDATE SET token_hash=excluded.token_hash''',
                    (app.config['DEVICE_ID'], token_hash(app.config['DEVICE_TOKEN']), json.dumps(DEFAULT_DISPLAY)))
@@ -197,11 +208,13 @@ def create_app(config=None):
             supplied = request.form.get('csrf_token', '')
             if not expected or not hmac.compare_digest(expected.encode(), supplied.encode()):
                 abort(400, '表单已失效，请刷新页面后重新提交。')
-        # Clean on each request, even if a device never checks in again. The persistent
-        # current state remains visible after its original history row has expired.
+        # NULL means permanent retention. Policies survive restarts and apply to
+        # receipt time, independent of a device's clock or late queued reports.
         db = get_db()
-        cutoff = (now() - timedelta(days=app.config['RETENTION_DAYS'])).isoformat()
-        db.execute('DELETE FROM events WHERE received_at < ?', (cutoff,))
+        current = now()
+        for policy in db.execute('SELECT device_id,retention_days FROM devices WHERE retention_days IS NOT NULL'):
+            cutoff = (current - timedelta(days=policy['retention_days'])).isoformat()
+            db.execute('DELETE FROM events WHERE device_id=? AND received_at < ?', (policy['device_id'], cutoff))
         db.commit()
         return None
 
@@ -430,18 +443,129 @@ def create_app(config=None):
     @app.get('/devices/<device_id>/history')
     @login_required
     def history(device_id):
-        if get_db().execute('SELECT 1 FROM devices WHERE device_id=?', (device_id,)).fetchone() is None:
+        db = get_db()
+        device = db.execute('SELECT retention_days FROM devices WHERE device_id=?', (device_id,)).fetchone()
+        if device is None:
             abort(404)
         page = request.args.get('page', 1, type=int)
         if page < 1 or page > 100000:
             abort(400)
+        entries = db.execute('''SELECT event_id,MAX(received_at) AS received_at FROM events
+                                WHERE device_id=? GROUP BY event_id
+                                ORDER BY received_at DESC,event_id DESC LIMIT 51 OFFSET ?''',
+                             (device_id, (page - 1) * 50)).fetchall()
         reports = []
-        for row in get_db().execute('''SELECT * FROM events WHERE device_id=? ORDER BY received_at DESC,event_id DESC,phase DESC
-                                      LIMIT 51 OFFSET ?''', (device_id, (page - 1) * 50)):
-            item = dict(row)
-            item['payload'] = json.loads(item['payload'])
-            reports.append(item)
-        return render_template('history.html', device_id=device_id, reports=reports[:50], page=page, more=len(reports) > 50)
+        cycles = []
+        for entry in entries[:50]:
+            rows = [dict(row) for row in db.execute('''SELECT * FROM events WHERE device_id=? AND event_id=?
+                    ORDER BY CASE phase WHEN 'check-in' THEN 0 WHEN 'final' THEN 1 ELSE 2 END''',
+                                                   (device_id, entry['event_id']))]
+            for row in rows:
+                row['payload'] = json.loads(row['payload'])
+            reports.extend(rows)
+            payload = merge_cycle(rows)
+            cycles.append(dict(entry, payload=payload, has_failures=cycle_has_failures(payload),
+                               phases=[row['phase'] for row in rows]))
+        return render_template('history.html', device_id=device_id, reports=reports, cycles=cycles,
+                               page=page, more=len(entries) > 50, retention_days=device['retention_days'],
+                               history_data_url=url_for('history_data', device_id=device_id),
+                               manage_url=url_for('history_manage', device_id=device_id), retention_options=[3, 7, 15, 30])
+
+    @app.get('/devices/<device_id>/history/data')
+    @login_required
+    def history_data(device_id):
+        db = get_db()
+        if db.execute('SELECT 1 FROM devices WHERE device_id=?', (device_id,)).fetchone() is None:
+            abort(404)
+        days = request.args.get('days', '7')
+        if days not in ('3', '7', '15', '30', '90', 'all'):
+            abort(400)
+        return jsonify(build_history_data(db, device_id, now(), None if days == 'all' else int(days)))
+
+    def history_scope(device_id, draft):
+        clauses, params = ['device_id=?', 'received_at<=?'], [device_id, draft['asof']]
+        if draft['action'] == 'delete_selected':
+            ids = draft['event_ids']
+            clauses.append('event_id IN (' + ','.join('?' for _ in ids) + ')')
+            params.extend(ids)
+        elif draft.get('cutoff'):
+            clauses.append('received_at < ?')
+            params.append(draft['cutoff'])
+        else:
+            clauses.append('0')  # Permanent retention never removes an existing row.
+        return ' AND '.join(clauses), params
+
+    @app.post('/devices/<device_id>/history/manage')
+    @login_required
+    def history_manage(device_id):
+        db = get_db()
+        if db.execute('SELECT 1 FROM devices WHERE device_id=?', (device_id,)).fetchone() is None:
+            abort(404)
+        signer = URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='history-management')
+        action = request.form.get('action')
+        if action == 'confirm':
+            try:
+                draft = signer.loads(request.form.get('confirmation_token', ''), max_age=600)
+            except (BadSignature, SignatureExpired):
+                abort(400, '确认已失效，请返回历史页面重新预览。')
+            nonce = session.get('history_confirmation')
+            if (not nonce or draft.get('nonce') != nonce or draft.get('device_id') != device_id):
+                abort(400, '确认已失效，请返回历史页面重新预览。')
+            scope, params = history_scope(device_id, draft)
+            with db:
+                if draft['action'] == 'retention':
+                    db.execute('UPDATE devices SET retention_days=? WHERE device_id=?',
+                               (draft['retention_days'], device_id))
+                db.execute('DELETE FROM events WHERE ' + scope, params)
+            session.pop('history_confirmation', None)
+            flash('保留设置已保存，过期历史已清理。' if draft['action'] == 'retention'
+                  else '所选历史已删除，设备当前状态和配置保持不变。', 'success')
+            return redirect(url_for('history', device_id=device_id))
+
+        draft = {'action': action, 'device_id': device_id, 'asof': now().isoformat(), 'nonce': secrets.token_hex(24)}
+        if action == 'retention':
+            raw = request.form.get('retention_days', '')
+            if raw == 'custom':
+                raw = request.form.get('custom_days', '')
+            if raw == 'forever':
+                days = None
+            elif re.fullmatch(r'[0-9]{1,5}', raw) and 1 <= int(raw) <= 36500:
+                days = int(raw)
+            else:
+                abort(400, '保留天数须为 1–36500 的整数，或选择永久保留。')
+            draft['retention_days'] = days
+            draft['cutoff'] = (now() - timedelta(days=days)).isoformat() if days else None
+            title = t('确认修改保留期限')
+            description = t('历史将永久保留，不再自动清理。') if days is None else t(
+                '历史将保留最近 {days} 天；此前收到的报告将立即清理，之后自动按此期限清理。', days=days)
+        elif action == 'delete_before':
+            before = request.form.get('before', '')
+            try:
+                if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', before):
+                    raise ValueError
+                cutoff = datetime.fromisoformat(before).replace(tzinfo=timezone.utc)
+            except ValueError:
+                abort(400, '请选择有效的删除截止日期。')
+            draft['cutoff'] = cutoff.isoformat()
+            title = t('确认按日期删除')
+            description = t('删除 {date} 00:00 UTC 之前收到的报告，不包含当天。', date=before)
+        elif action == 'delete_selected':
+            ids = list(dict.fromkeys(request.form.getlist('event_ids')))
+            if not ids or len(ids) > 50 or any(not IDENTIFIER.fullmatch(value) for value in ids):
+                abort(400, '请选择 1–50 个运行周期。')
+            draft['event_ids'] = ids
+            title = t('确认删除所选周期')
+            description = t('将删除所选运行周期的全部历史报告。')
+        else:
+            abort(400)
+        scope, params = history_scope(device_id, draft)
+        counts = db.execute('SELECT COUNT(*),COUNT(DISTINCT event_id) FROM events WHERE ' + scope, params).fetchone()
+        session['history_confirmation'] = draft['nonce']
+        return render_template('history_confirm.html', device_id=device_id, action=action,
+                               title=title, description=description, count=counts[0], cycles=counts[1],
+                               confirmation_token=signer.dumps(draft), manage_url=url_for('history_manage', device_id=device_id),
+                               language_next=url_for('history', device_id=device_id),
+                               details=t('此操作无法撤销。设备当前状态、屏幕内容及调试设置会保留。') if counts[0] else '')
 
     @app.get('/healthz')
     def healthz():

@@ -83,6 +83,83 @@ ENGLISH = {
     '服务器错误': 'Server error', '服务暂时无法处理请求，请稍后重试。': 'The server cannot process this request. Try again later.',
     '请求失败': 'Request failed', '请稍后重试。': 'Try again later.',
     '不支持此语言。': 'This language is not supported.',
+    '设备洞察': 'Device insights', '看见每一轮变化。': 'A clearer view of every cycle.',
+    '图表与记录时间均为 UTC。': 'Chart and report timestamps use UTC.',
+    '管理历史数据': 'Manage history', '区间概览': 'Range overview',
+    '最近电量': 'Latest battery', '区间电量变化': 'Battery change',
+    '典型运行耗时': 'Typical cycle time', '以运行周期耗时的中位数计算': 'Median reported cycle duration',
+    '等待电量样本': 'Awaiting a battery sample', '等待历史数据': 'Awaiting history',
+    '至少两个电量样本后可比较': 'Needs at least two battery samples',
+    '正在整理历史数据…': 'Loading history…',
+    '历史数据加载失败，请重试。': 'History could not load. Please retry.',
+    '重新加载': 'Retry', '这个时间范围还没有报告。': 'No reports in this time range.',
+    '此指标暂无有效样本。': 'No valid samples for this metric yet.',
+    '移动指针查看样本，或聚焦图表后使用左右方向键。':
+        'Hover to inspect samples, or focus the chart and use the arrow keys.',
+    '电池电量': 'Battery level', '电池电压': 'Battery voltage', 'PiSugar 温度': 'PiSugar temperature',
+    '运行耗时': 'Cycle duration', '异常周期': 'Cycles with faults', '原始报告': 'Raw reports',
+    '个百分点': 'pp', '小时': 'hours', '分钟': 'minutes', '秒': 'seconds', '天': 'days',
+    '聚合间隔': 'Bucket width', '次': 'cycles', '份': 'reports', '个样本': 'samples',
+    '区间内没有上报异常': 'No faults reported in this range',
+    '有异常上报的周期': 'cycles with reported faults',
+    '数据覆盖': 'Coverage', '等待第一份报告': 'Awaiting the first report',
+    '图表已按时间聚合；数值显示有效样本平均值。':
+        'Time buckets show the average of valid samples.',
+    '每个点代表一次运行周期；缺失指标保留为空。':
+        'Each point is a cycle. Missing readings remain gaps.',
+    '选中样本': 'Selected sample', '报到与异常分布': 'Check-ins & faults',
+    '绿色表示运行周期，橙色表示其中有异常上报的周期。':
+        'Green bars show cycles; orange shows cycles with reported faults.',
+    '趋势分析': 'TRENDS', '电量与设备状态': 'Battery & device health',
+    '图表时间范围': 'Chart time range', '图表指标': 'Chart metric',
+    '近 {days} 天': '{days} days', '全部': 'All time', '最新样本': 'Latest sample',
+    '电量曲线反映电池百分比变化；充电和电量校准也会影响读数。尚未采集电流，不能换算为实际 mAh 或 Wh 耗电。':
+        'The battery curve shows percentage changes, including charging and gauge calibration. Current is not measured, so actual energy use in mAh or Wh is unavailable.',
+    '图表需要 JavaScript；下方仍可查看报告明细。':
+        'Charts need JavaScript. Report details remain available below.',
+    '运行节奏': 'ACTIVITY', '查看图表数据': 'View chart data', '时间（UTC）': 'Time (UTC)',
+    '数据管理': 'DATA MANAGEMENT', '让记录按你的方式保留。': 'Keep history on your terms.',
+    '当前保留策略': 'Current policy', '永久保留': 'Keep forever',
+    '保留 {days} 天': 'Keep {days} days', '永久保留（默认）': 'Keep forever (default)',
+    '有限保留期会自动清理过期报告。删除前会显示影响范围，并再次确认。设备配置和当前状态会保留。':
+        'A limited retention period automatically removes older reports. Review the affected records before confirming. Device settings and current state are preserved.',
+    '历史保留期限': 'History retention', '自定义天数': 'Custom period',
+    '自定义天数（1–36500）': 'Custom days (1–36500)', '预览并保存': 'Review & save',
+    '批量删除某日期之前的记录': 'Delete records before a date', '预览删除': 'Review deletion',
+    '以所选日期 UTC 00:00 为界，不包含当天。': 'Before 00:00 UTC on the selected date; that day is excluded.',
+    '逐次记录': 'CYCLE LOG', '同一次运行的报到、最终报告与补充结果合并展示。':
+        'Check-in, final report and outcome are grouped into one cycle.',
+    '选择本页': 'Select this page', '预览删除选中记录': 'Review selected deletion',
+    '选择运行周期 {event_id}': 'Select cycle {event_id}',
+    '有异常': 'Fault reported', '已完成': 'Completed', '仅报到': 'Check-in only',
+    '查看运行详情': 'Cycle details',
+    '设备下一次报到后，这里会显示运行记录和指标。':
+        'Cycle records and metrics appear after the next check-in.',
+    '确认历史数据操作': 'Confirm history changes', '返回报告历史': 'Report history',
+    '操作预览': 'REVIEW CHANGES',
+    '这些历史记录将被永久删除，无法恢复。设备配置和当前状态会保留。':
+        'These history records will be permanently deleted and cannot be recovered. Device settings and current state are preserved.',
+    '此次操作不会删除现有历史报告。': 'This change will not delete existing reports.',
+    '确认删除并保存': 'Delete & save policy', '确认永久删除': 'Permanently delete', '确认保存': 'Confirm & save', '确认操作': 'Confirm changes',
+    '确认已失效，请返回历史页面重新预览。': 'This confirmation expired. Return to history and review again.',
+    '保留天数须为 1–36500 的整数，或选择永久保留。':
+        'Choose forever or a whole number of days from 1 to 36500.',
+    '请选择有效的删除截止日期。': 'Choose a valid deletion cutoff date.',
+    '请选择 1–50 个运行周期。': 'Select between 1 and 50 cycles.',
+    '保留设置已保存，过期历史已清理。': 'Retention saved. Expired history has been removed.',
+    '所选历史已删除，设备当前状态和配置保持不变。':
+        'Selected history deleted. Current device state and settings are preserved.',
+    '确认修改保留期限': 'Confirm retention policy',
+    '历史将永久保留，不再自动清理。': 'History will be kept forever without automatic cleanup.',
+    '历史将保留最近 {days} 天；此前收到的报告将立即清理，之后自动按此期限清理。':
+        'Keep the most recent {days} days. Older reports will be deleted now, and future cleanup will follow this policy.',
+    '确认按日期删除': 'Confirm deletion by date',
+    '删除 {date} 00:00 UTC 之前收到的报告，不包含当天。':
+        'Delete reports received before {date} at 00:00 UTC; the selected day is excluded.',
+    '确认删除所选周期': 'Confirm selected cycle deletion',
+    '将删除所选运行周期的全部历史报告。': 'All historical reports for the selected cycles will be deleted.',
+    '此操作无法撤销。设备当前状态、屏幕内容及调试设置会保留。':
+        'This cannot be undone. Current device state, screen content and debug settings are preserved.',
 }
 
 
