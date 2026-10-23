@@ -11,6 +11,7 @@ import re
 import secrets
 import sqlite3
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -19,6 +20,7 @@ from werkzeug.security import check_password_hash
 
 from .i18n import LANGUAGE_COOKIE, LANGUAGES, get_language, t
 from .history import build_history_data, cycle_has_failures, merge_cycle
+from .battery import estimate_battery
 
 DEFAULT_DISPLAY = {'title': 'E-PAPER', 'status': 'Ready', 'rows': [
     {'label': 'Device', 'value': 'Connected'}, {'label': 'Content', 'value': 'Edit in the control panel'}]}
@@ -73,6 +75,27 @@ def timestamp(value):
         return result.astimezone(timezone.utc) if result.tzinfo else None
     except (ValueError, OverflowError):
         return None
+
+
+def local_day_start(day, zone):
+    """Find the first real instant of a calendar date in an IANA timezone."""
+    candidates = [day.replace(tzinfo=zone, fold=fold).astimezone(timezone.utc) for fold in (0, 1)]
+    midnights = [value for value in candidates
+                 if value.astimezone(zone).replace(tzinfo=None) == day]
+    if midnights:
+        return min(midnights)
+    # Some zones skip midnight. Search across the transition, including half-hour
+    # jumps, instead of assuming that the date always starts at 00:00 or 01:00.
+    low, high = sorted(candidates)
+    if high.astimezone(zone).date() != day.date():
+        raise ValueError('The timezone skips this calendar date.')
+    while high - low > timedelta(microseconds=1):
+        middle = low + (high - low) / 2
+        if middle.astimezone(zone).date() < day.date():
+            low = middle
+        else:
+            high = middle
+    return high
 
 
 def validate_display(value):
@@ -393,12 +416,13 @@ def create_app(config=None):
     @login_required
     def dashboard():
         devices = []
+        current = now()
         for row in get_db().execute('SELECT * FROM devices ORDER BY device_id'):
             item = dict(row)
             item.pop('token_hash')
             item['display'] = json.loads(item.pop('display_json'))
             item['payload'] = json.loads(item.pop('latest_payload') or '{}')
-            item['health'], item['health_label'] = health(item, now())
+            item['health'], item['health_label'] = health(item, current)
             item['values'] = item['payload'].get('metrics', {}).get('values', {})
             item['battery_percent'] = item['values'].get('battery_percent')
             if item['battery_percent'] is None:
@@ -406,8 +430,9 @@ def create_app(config=None):
             item['wifi_rssi'] = item['values'].get('wifi_rssi')
             item['failures'] = item['payload'].get('failures') or item['payload'].get('pending_failures', [])
             item['expected_next_run'] = expected_next_run(item['payload'])
+            item['estimate'] = estimate_battery(get_db(), item['device_id'], current)
             devices.append(item)
-        return render_template('dashboard.html', devices=devices, base_url=app.config['BASE_URL'], now=now().isoformat())
+        return render_template('dashboard.html', devices=devices, base_url=app.config['BASE_URL'], now=current.isoformat())
 
     @app.route('/devices/<device_id>/settings', methods=['GET', 'POST'])
     @login_required
@@ -480,7 +505,10 @@ def create_app(config=None):
         days = request.args.get('days', '7')
         if days not in ('3', '7', '15', '30', '90', 'all'):
             abort(400)
-        return jsonify(build_history_data(db, device_id, now(), None if days == 'all' else int(days)))
+        current = now()
+        result = build_history_data(db, device_id, current, None if days == 'all' else int(days))
+        result['estimate'] = estimate_battery(db, device_id, current)
+        return jsonify(result)
 
     def history_scope(device_id, draft):
         clauses, params = ['device_id=?', 'received_at<=?'], [device_id, draft['asof']]
@@ -543,12 +571,24 @@ def create_app(config=None):
             try:
                 if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', before):
                     raise ValueError
-                cutoff = datetime.fromisoformat(before).replace(tzinfo=timezone.utc)
+                local_day = datetime.fromisoformat(before)
             except ValueError:
                 abort(400, '请选择有效的删除截止日期。')
+            zone_name = request.form.get('timezone', '')
+            try:
+                if not zone_name or len(zone_name) > 128:
+                    raise ValueError
+                zone = ZoneInfo(zone_name)
+            except (ValueError, ZoneInfoNotFoundError):
+                abort(400, '无法识别浏览器时区，请启用 JavaScript 并刷新页面。')
+            try:
+                cutoff = local_day_start(local_day, zone)
+            except (ValueError, OverflowError):
+                abort(400, '该日期在所选时区不存在，请选择其他日期。')
+            draft['timezone'] = zone.key
             draft['cutoff'] = cutoff.isoformat()
             title = t('确认按日期删除')
-            description = t('删除 {date} 00:00 UTC 之前收到的报告，不包含当天。', date=before)
+            description = t('删除 {date}（{zone}）当天开始之前收到的报告，不包含当天。', date=before, zone=zone.key)
         elif action == 'delete_selected':
             ids = list(dict.fromkeys(request.form.getlist('event_ids')))
             if not ids or len(ids) > 50 or any(not IDENTIFIER.fullmatch(value) for value in ids):
@@ -565,6 +605,7 @@ def create_app(config=None):
                                title=title, description=description, count=counts[0], cycles=counts[1],
                                confirmation_token=signer.dumps(draft), manage_url=url_for('history_manage', device_id=device_id),
                                language_next=url_for('history', device_id=device_id),
+                               cutoff=draft.get('cutoff'), timezone=draft.get('timezone'),
                                details=t('此操作无法撤销。设备当前状态、屏幕内容及调试设置会保留。') if counts[0] else '')
 
     @app.get('/healthz')

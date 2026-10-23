@@ -82,16 +82,16 @@ def cycle_has_failures(payload):
     return bool(payload.get('failures') or _mapping(payload.get('metrics')).get('failures') or explicit_failure)
 
 
-def _cycles(db, device_id, now, cutoff):
+def _cycles(db, device_id, now, cutoff, point_builder=None):
     # The primary key supplies event order. At most three report payloads are kept
     # in Python at once, even when retention is permanent.
     if cutoff is None:
         cursor = db.execute('SELECT event_id, phase, received_at, payload FROM events '
                             'WHERE device_id=? ORDER BY event_id, phase', (device_id,))
     else:
-        # A sample is never later than its first receipt: started_at is accepted
-        # only when <= first receipt. Wholly old events can therefore be skipped
-        # using the device/receipt-time index.
+        # A sample cannot be later than its last receipt. Wholly old events can
+        # therefore be skipped using the device/receipt-time index, including
+        # when a custom point builder prefers the metric's actual sample time.
         # Fetch every phase for candidates, including an older check-in whose
         # trusted clock and battery measurement a new backfill may omit.
         cursor = db.execute('WITH candidates AS (SELECT DISTINCT event_id FROM events '
@@ -99,19 +99,20 @@ def _cycles(db, device_id, now, cutoff):
                             'SELECT e.event_id, e.phase, e.received_at, e.payload FROM candidates c '
                             'JOIN events e ON e.event_id=c.event_id AND e.device_id=? '
                             'ORDER BY e.event_id, e.phase', (device_id, cutoff.isoformat(), device_id))
+    point_builder = point_builder or _cycle_point
     current_id = None
     rows = []
     try:
         for row in cursor:
             if rows and row['event_id'] != current_id:
-                point = _cycle_point(rows, now, cutoff)
+                point = point_builder(rows, now, cutoff)
                 if point is not None:
                     yield point, len(rows)
                 rows = []
             current_id = row['event_id']
             rows.append(row)
         if rows:
-            point = _cycle_point(rows, now, cutoff)
+            point = point_builder(rows, now, cutoff)
             if point is not None:
                 yield point, len(rows)
     finally:

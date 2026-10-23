@@ -358,6 +358,8 @@ class ServerTests(unittest.TestCase):
 
     def history_action(self, **fields):
         fields['csrf_token'] = self.csrf()
+        if fields.get('action') == 'delete_before':
+            fields.setdefault('timezone', 'UTC')
         return self.client.post('/devices/test-screen/history/manage', data=fields)
 
     def confirm_history(self, **fields):
@@ -424,6 +426,44 @@ class ServerTests(unittest.TestCase):
         with self.app.app_context():
             self.assertEqual(get_db().execute("SELECT COUNT(*) FROM events WHERE event_id='old'").fetchone()[0], 0)
 
+    def test_local_date_deletion_respects_dst_and_excludes_selected_day(self):
+        self.login()
+        for before, boundary in [('2026-03-09', datetime(2026, 3, 9, 4, tzinfo=timezone.utc)),
+                                 ('2026-11-02', datetime(2026, 11, 2, 5, tzinfo=timezone.utc))]:
+            with self.subTest(before=before):
+                self.now = boundary - timedelta(seconds=1)
+                old = 'old-'+before
+                current = 'boundary-'+before
+                self.check_in(old)
+                self.now = boundary
+                self.check_in(current)
+                self.confirm_history(action='delete_before', before=before, timezone='America/New_York')
+                with self.app.app_context():
+                    ids = [row[0] for row in get_db().execute('SELECT event_id FROM events')]
+                self.assertNotIn(old, ids)
+                self.assertIn(current, ids)
+
+    def test_local_date_deletion_requires_valid_browser_zone_and_real_date(self):
+        self.check_in()
+        self.login()
+        for zone in ('', '../etc/passwd', 'Not/A_Real_Zone'):
+            self.assertEqual(self.history_action(action='delete_before', before='2026-10-21', timezone=zone).status_code, 400)
+        self.assertEqual(self.history_action(action='delete_before', before='2011-12-30', timezone='Pacific/Apia').status_code, 400)
+        with self.app.app_context():
+            self.assertEqual(get_db().execute('SELECT COUNT(*) FROM events').fetchone()[0], 1)
+
+    def test_local_date_start_handles_repeated_and_skipped_midnight(self):
+        from src.server import local_day_start
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo('America/Havana')
+        spring = local_day_start(datetime(2026, 3, 8), zone)
+        autumn = local_day_start(datetime(2026, 11, 1), zone)
+        self.assertEqual(spring, datetime(2026, 3, 8, 5, tzinfo=timezone.utc))
+        self.assertEqual(spring.astimezone(zone).hour, 1)
+        self.assertEqual(autumn, datetime(2026, 11, 1, 4, tzinfo=timezone.utc))
+        toronto = local_day_start(datetime(1919, 3, 31), ZoneInfo('America/Toronto'))
+        self.assertEqual(toronto, datetime(1919, 3, 31, 4, 30, tzinfo=timezone.utc))
+
     def test_selected_deletion_is_scoped_to_preview_and_all_existing_phases(self):
         self.check_in('one')
         self.report('one', metrics={'values': {'battery_percent': 70}})
@@ -484,6 +524,24 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(response.json['series'][0]['battery_percent'], 79)
         self.assertEqual(self.client.get(path+'?days=invalid').status_code, 400)
         self.assertEqual(self.client.get('/devices/unknown/history/data').status_code, 404)
+
+    def test_battery_estimate_is_available_on_history_api_and_dashboard(self):
+        for index, percent in enumerate((90, 87, 84)):
+            self.now = datetime(2026, 10, 22, index * 6, tzinfo=timezone.utc)
+            event = 'battery-'+str(index)
+            self.check_in(event, time_trusted=True)
+            self.report(event, time_trusted=True, started_at=self.now.isoformat(),
+                        metrics={'timestamp': self.now.isoformat(), 'values': {'battery_percent': percent}})
+        self.login()
+        estimate = self.client.get('/devices/test-screen/history/data?days=all').json['estimate']
+        self.assertEqual(estimate['status'], 'ready')
+        self.assertEqual(estimate['daily_consumption_pp'], 12)
+        self.assertEqual(estimate['reserve_percent'], 10)
+        self.assertAlmostEqual(estimate['remaining_days'], 74 / 12, places=3)
+        dashboard = self.client.get('/')
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertIn('估计日耗电'.encode(), dashboard.data)
+        self.assertIn('预计剩余续航'.encode(), dashboard.data)
 
     def test_cycle_details_and_charts_share_failure_definition(self):
         self.check_in()

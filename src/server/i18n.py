@@ -28,7 +28,6 @@ ENGLISH = {
     '返回设备概览': 'Device overview', '报告历史': 'Report history',
     '报告历史 · 保留 30 天': 'Report history · 30 days',
     '每次报到，都有记录。': 'Every check-in tells a story.',
-    '以下接收时间均为服务器 UTC 时间。': 'Received timestamps below are server UTC time.',
     '原始报告（JSON，保留设备字段与诊断信息）': 'Raw report (JSON with original fields and diagnostics)',
     '暂未收到报告。': 'No reports received yet.', '较新记录': 'Newer', '较早记录': 'Older',
     '第 {number} 页': 'Page {number}', '登录': 'Sign in',
@@ -84,7 +83,6 @@ ENGLISH = {
     '请求失败': 'Request failed', '请稍后重试。': 'Try again later.',
     '不支持此语言。': 'This language is not supported.',
     '设备洞察': 'Device insights', '看见每一轮变化。': 'A clearer view of every cycle.',
-    '图表与记录时间均为 UTC。': 'Chart and report timestamps use UTC.',
     '管理历史数据': 'Manage history', '区间概览': 'Range overview',
     '最近电量': 'Latest battery', '区间电量变化': 'Battery change',
     '典型运行耗时': 'Typical cycle time', '以运行周期耗时的中位数计算': 'Median reported cycle duration',
@@ -117,7 +115,7 @@ ENGLISH = {
         'The battery curve shows percentage changes, including charging and gauge calibration. Current is not measured, so actual energy use in mAh or Wh is unavailable.',
     '图表需要 JavaScript；下方仍可查看报告明细。':
         'Charts need JavaScript. Report details remain available below.',
-    '运行节奏': 'ACTIVITY', '查看图表数据': 'View chart data', '时间（UTC）': 'Time (UTC)',
+    '运行节奏': 'ACTIVITY', '查看图表数据': 'View chart data',
     '数据管理': 'DATA MANAGEMENT', '让记录按你的方式保留。': 'Keep history on your terms.',
     '当前保留策略': 'Current policy', '永久保留': 'Keep forever',
     '保留 {days} 天': 'Keep {days} days', '永久保留（默认）': 'Keep forever (default)',
@@ -126,7 +124,6 @@ ENGLISH = {
     '历史保留期限': 'History retention', '自定义天数': 'Custom period',
     '自定义天数（1–36500）': 'Custom days (1–36500)', '预览并保存': 'Review & save',
     '批量删除某日期之前的记录': 'Delete records before a date', '预览删除': 'Review deletion',
-    '以所选日期 UTC 00:00 为界，不包含当天。': 'Before 00:00 UTC on the selected date; that day is excluded.',
     '逐次记录': 'CYCLE LOG', '同一次运行的报到、最终报告与补充结果合并展示。':
         'Check-in, final report and outcome are grouped into one cycle.',
     '选择本页': 'Select this page', '预览删除选中记录': 'Review selected deletion',
@@ -154,12 +151,50 @@ ENGLISH = {
     '历史将保留最近 {days} 天；此前收到的报告将立即清理，之后自动按此期限清理。':
         'Keep the most recent {days} days. Older reports will be deleted now, and future cleanup will follow this policy.',
     '确认按日期删除': 'Confirm deletion by date',
-    '删除 {date} 00:00 UTC 之前收到的报告，不包含当天。':
-        'Delete reports received before {date} at 00:00 UTC; the selected day is excluded.',
+    '删除 {date}（{zone}）当天开始之前收到的报告，不包含当天。':
+        'Delete reports received before the start of {date} in {zone}; the selected day is excluded.',
     '确认删除所选周期': 'Confirm selected cycle deletion',
     '将删除所选运行周期的全部历史报告。': 'All historical reports for the selected cycles will be deleted.',
     '此操作无法撤销。设备当前状态、屏幕内容及调试设置会保留。':
         'This cannot be undone. Current device state, screen content and debug settings are preserved.',
+    '浏览器本地时区': 'Browser local time zone', '当地时间': 'Local time',
+    '需启用 JavaScript 显示本地时间': 'Enable JavaScript to show local time',
+    '无法识别浏览器时区': 'Browser time zone unavailable',
+    '时间按浏览器识别的当地时区显示。': 'Times follow the local time zone detected by your browser.',
+    '按浏览器当地日期的开始时间删除，不包含当天。':
+        'Delete before the start of the selected local date; that day is excluded.',
+    '实际删除截止时间': 'Deletion cutoff',
+    '无法识别浏览器时区，请启用 JavaScript 并刷新页面。':
+        'Your browser time zone is unavailable. Enable JavaScript and reload the page.',
+    '该日期在所选时区不存在，请选择其他日期。':
+        'This date does not exist in the selected time zone. Choose another date.',
+    '耗电与续航估算': 'Battery use & runtime estimate', '能耗预测': 'BATTERY OUTLOOK',
+    '每天耗多少，还能用多久。': 'Daily drain. Days ahead.',
+    '历史趋势估算': 'Estimated from history', '估计日耗电': 'Estimated daily drain',
+    '个百分点/天': 'pp/day', '相当于每天减少的电量百分比': 'Battery percentage points used per day',
+    '预计剩余续航': 'Estimated runtime left', '计算至 {percent}% 保护电量': 'Until the {percent}% battery reserve',
+    '预计到达保护电量': 'Estimated reserve reached', '按当前放电趋势推算': 'At the current discharge trend',
+    '最近有效电量样本': 'Latest valid battery sample',
+    '根据最近的连续放电趋势估算': 'Based on the latest continuous discharge trend',
+    '还需要更多电量样本和观察时间，才能给出可靠估算。':
+        'More battery samples and observation time are needed for a useful estimate.',
+    '尚未观察到足够的电量下降；可能正在外接供电或电量读数尚未变化。':
+        'No clear battery drop yet. External power or an unchanged battery reading may explain this.',
+    '电量回升，等待新的稳定放电样本。':
+        'Battery level rose. Waiting for a new, steady discharge trend.',
+    '最近的电量样本已过时，等待设备再次报到后更新续航。':
+        'The latest battery sample is too old. Runtime will update after the next check-in.',
+    '采样间隔较长，等待新的连续放电数据。':
+        'Samples are too far apart. Waiting for a new continuous discharge trend.',
+    '按历史趋势推算，已到保护电量，请检查最新电量。':
+        'The trend projects that the battery reserve has been reached. Check the latest battery reading.',
+    '近 {window} 天内 {count} 个样本，覆盖 {hours} 小时。':
+        '{count} samples over {hours} hours, from the last {window} days.',
+    '期间电量下降 {drop} 个百分点。': 'Battery dropped {drop} percentage points over this period.',
+    '独立采用最近 7 天的有效电量样本，不随图表范围改变。':
+        'Uses valid battery samples from the last 7 days, independently of the chart range.',
+    '这是基于历史电量变化的推算，充电、电量校准和使用频率变化都会影响结果。':
+        'This projection follows battery history. Charging, gauge calibration and changes in use can affect it.',
 }
 
 

@@ -23,8 +23,8 @@
   const valid = value => typeof value === 'number' && Number.isFinite(value);
   const fmt = (value, digits = 1) => valid(value) ? value.toLocaleString(locale, {maximumFractionDigits: digits}) : '—';
   const fullTime = value => {
-    const date = new Date(value);
-    return Number.isFinite(date.getTime()) ? date.toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : '—';
+    const formatted = window.EpaperTime.format(value);
+    return formatted === '—' ? formatted : formatted + ' ' + window.EpaperTime.offset(value);
   };
   const set = (name, value) => {
     const node = root.querySelector('[data-value="' + name + '"]');
@@ -49,14 +49,7 @@
     if (text !== null) element.textContent = text;
     return element;
   };
-  const axisTime = (ms, span, short = false) => new Intl.DateTimeFormat(locale, {
-    ...(short && span < 172800000 ? {hour: '2-digit', minute: '2-digit', hour12: false} : {
-      month: '2-digit', ...(short && span > 30000000000 ? {} : {day: '2-digit'}),
-      ...(span > 30000000000 ? {year: 'numeric'} : {}),
-      ...(!short && span < 172800000 ? {hour: '2-digit', minute: '2-digit', hour12: false} : {}),
-    }),
-    timeZone: 'UTC',
-  }).format(new Date(ms));
+  const axisTime = (ms, span, short = false) => window.EpaperTime.axis(ms, span, short);
   const extent = series => {
     const stamps = series.map(point => Date.parse(point.at)).filter(Number.isFinite);
     if (!stamps.length) return [Date.now() - 86400000, Date.now()];
@@ -79,6 +72,33 @@
     const seconds = data.bucket_seconds;
     const interval = seconds >= 86400 ? fmt(seconds / 86400) + ' ' + labels.days : seconds >= 3600 ? fmt(seconds / 3600) + ' ' + labels.hours : seconds >= 60 ? fmt(seconds / 60) + ' ' + labels.minutes : fmt(seconds) + ' ' + labels.seconds;
     set('sampling', seconds ? labels.bucketInterval + ' ' + interval + ' · ' + labels.bucket : labels.exact);
+  }
+  function estimate() {
+    const value = data.estimate || {};
+    const panel = root.querySelector('[data-estimate-panel]');
+    if (!panel) return;
+    const text = (key, content) => { panel.querySelector('[data-estimate="' + key + '"]').textContent = content; };
+    const interpolate = (message, values) => message.replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? '—'));
+    text('daily', fmt(value.daily_consumption_pp));
+    text('remaining', fmt(value.remaining_days));
+    const timestamp = (name, iso) => {
+      const element = panel.querySelector('[data-estimate="' + name + '"]');
+      if (iso && Number.isFinite(Date.parse(iso))) {
+        const time = document.createElement('time');
+        time.dateTime = iso;
+        element.replaceChildren(time);
+        window.EpaperTime.refresh(element);
+      } else element.textContent = '—';
+    };
+    timestamp('until', value.estimated_until);
+    timestamp('latest', value.latest_at);
+    const statuses = {ready: labels.estimateReady, insufficient: labels.estimateInsufficient,
+      flat: labels.estimateFlat, charging: labels.estimateCharging, stale: labels.estimateStale, gap: labels.estimateGap};
+    text('status', value.status === 'ready' && valid(value.remaining_days) && value.remaining_days <= 0 ? labels.estimateAtReserve : statuses[value.status] || labels.estimateInsufficient);
+    let basis = value.sample_count && valid(value.span_hours) ? interpolate(labels.estimateBasis,
+      {window: value.window_days || 7, count: fmt(value.sample_count, 0), hours: fmt(value.span_hours)}) : labels.estimateWindow;
+    if (valid(value.observed_drop_pp) && value.observed_drop_pp > 0) basis += ' ' + interpolate(labels.estimateDrop, {drop: fmt(value.observed_drop_pp)});
+    text('basis', basis);
   }
   function grid(low, high, start, end) {
     const mobile = compact();
@@ -195,7 +215,7 @@
       if (!item.cycles) continue;
       const height = Math.max(3, item.cycles / maximum * 62);
       const rect = node('rect', {x, y: 76 - height, width: barWidth, height, rx: 2, class: 'activity-bar'});
-      rect.append(node('title', {}, axisTime(start + (end - start) * i / 64, end - start) + ' UTC · ' + labels.cycles + ': ' + item.cycles + ' · ' + labels.failures + ': ' + item.failures));
+      rect.append(node('title', {}, fullTime(start + (end - start) * i / 64) + ' · ' + labels.cycles + ': ' + item.cycles + ' · ' + labels.failures + ': ' + item.failures));
       activity.append(rect);
       if (item.failures) activity.append(node('rect', {x, y: 76 - item.failures / maximum * 62, width: barWidth, height: Math.max(3, item.failures / maximum * 62), rx: 2, class: 'activity-failure'}));
     }
@@ -229,7 +249,7 @@
       if (!Array.isArray(result.series) || !result.summary) throw new Error('Invalid history response');
       result.series = result.series.filter(point => point && Number.isFinite(Date.parse(point.at))).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
       if (current !== controller) return;
-      data = result; summary(); chart(); activityChart(); sampleTable();
+      data = result; summary(); estimate(); chart(); activityChart(); sampleTable();
     } catch (error) {
       if (error.name === 'AbortError') return;
       clear();
