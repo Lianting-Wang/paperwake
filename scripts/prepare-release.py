@@ -22,6 +22,7 @@ def prepare(config, epd, output):
     mappings = [
         (ROOT / 'src/scheduler/pisched.py', 'opt/pisched/pisched.py', 0o755),
         (ROOT / 'src/scheduler/server_client.py', 'opt/pisched/server_client.py', 0o644),
+        (ROOT / 'src/scheduler/wake_plan.py', 'opt/pisched/wake_plan.py', 0o644),
         (ROOT / 'src/tasks/collect_metrics.py', 'opt/pisched/collect_metrics.py', 0o755),
         (ROOT / 'deploy/systemd/pisched.service', 'etc/systemd/system/pisched.service', 0o644),
         (config, 'etc/pisched/config.json', 0o644),

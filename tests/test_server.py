@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.server import create_app, get_db, health, validate_display
+from src.scheduler.wake_plan import validate_wake_plan
 from werkzeug.security import generate_password_hash
 
 
@@ -341,6 +342,96 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(response.json['content_version'], 2)
         with second.app_context():
             self.assertEqual(get_db().execute("SELECT COUNT(*) FROM events WHERE phase='final'").fetchone()[0], 1)
+
+    def save_wake_policy(self, **updates):
+        fields = {'action': 'wake_plan', 'wake_timezone': 'America/New_York', 'wake_schedule': '08:00\n12:00\n18:00',
+                  'csrf_token': self.csrf('/devices/test-screen/settings')}
+        fields.update(updates)
+        return self.client.post('/devices/test-screen/settings', data=fields)
+
+    def test_wake_plan_seeds_once_and_is_returned_to_old_devices_after_seeding(self):
+        self.assertNotIn('wake_plan', self.check_in().json)
+        local = {'timezone': 'America/New_York', 'schedule': ['18:00', '08:00', '12:00']}
+        downloaded = self.check_in('upgraded-boot', wake_schedule=local).json['wake_plan']
+        self.assertEqual(validate_wake_plan(downloaded), downloaded)
+        self.assertEqual(downloaded['schedule'], ['08:00', '12:00', '18:00'])
+        self.assertEqual(downloaded['version'], 1)
+        # An old replay or an unchanged device configuration cannot undo an edit.
+        other = {'timezone': 'UTC', 'schedule': ['00:00']}
+        self.assertEqual(self.check_in('old-boot', wake_schedule=other).json['wake_plan'], downloaded)
+        self.assertEqual(self.check_in('legacy-boot').json['wake_plan'], downloaded)
+        self.now += timedelta(hours=30)
+        refreshed = self.check_in('later-boot', wake_schedule=other).json['wake_plan']
+        self.assertEqual(refreshed['schedule'], downloaded['schedule'])
+        self.assertEqual(refreshed['version'], 1)
+        self.assertGreater(refreshed['occurrences'][0], downloaded['occurrences'][0])
+
+    def test_admin_wake_plan_is_independent_authoritative_and_persistent(self):
+        self.login()
+        self.settings(debug='on')
+        original = self.device()
+        self.assertEqual(self.save_wake_policy().status_code, 302)
+        saved = self.device()
+        for field in ('debug', 'display_json', 'content_version'):
+            self.assertEqual(saved[field], original[field])
+        self.assertEqual(saved['wake_policy_version'], 1)
+        self.assertEqual(self.save_wake_policy(wake_schedule='18:00, 12:00 08:00').status_code, 302)
+        self.assertEqual(self.device()['wake_policy_version'], 1)
+        self.save_wake_policy(wake_schedule='09:00, 17:00', wake_timezone='Europe/London')
+        self.assertEqual(self.device()['wake_policy_version'], 2)
+        self.settings()  # Content saves must preserve the wake policy.
+        downloaded = self.check_in(wake_schedule={'timezone': 'UTC', 'schedule': ['00:00']}).json['wake_plan']
+        self.assertEqual(downloaded['timezone'], 'Europe/London')
+        self.assertEqual(downloaded['schedule'], ['09:00', '17:00'])
+        self.assertEqual(downloaded['version'], 2)
+        restarted = create_app(self.config).test_client()
+        response = restarted.post('/api/v1/check-in', json={'device_id': 'test-screen', 'event_id': 'restart',
+            'started_at': self.now.isoformat()}, headers=self.auth)
+        self.assertEqual(response.json['wake_plan'], downloaded)
+        self.report('restart', wake_plan={'source': 'cache', 'version': 2, 'timezone': 'Europe/London',
+            'valid_until': downloaded['occurrences'][-1], 'future_occurrences': downloaded['occurrences'][:5],
+            'occurrence_count': len(downloaded['occurrences']), 'cached': True})
+        dashboard = self.client.get('/').data
+        self.assertIn('本地缓存'.encode(), dashboard)
+        self.assertIn('已持久保存'.encode(), dashboard)
+        self.assertIn(b'<time datetime="' + downloaded['occurrences'][-1].encode(), dashboard)
+        self.switch_language('en', '/devices/test-screen/settings')
+        settings = self.client.get('/devices/test-screen/settings').data
+        self.assertIn(b'Daily wake schedule', settings)
+        self.assertIn(b'name="wake_timezone" value="Europe/London"', settings)
+        self.assertIn(b'Next five wakes', settings)
+
+    def test_invalid_wake_policy_is_nonmutating_and_admin_save_requires_csrf(self):
+        for policy in (None, {}, {'timezone': 'UTC', 'schedule': ['24:00']},
+                       {'timezone': 'UTC', 'schedule': ['08:00', '08:00']}):
+            with self.subTest(policy=policy):
+                self.assertEqual(self.check_in(wake_schedule=policy).status_code, 400)
+                self.assertIsNone(self.device()['wake_policy_json'])
+                self.assertIsNone(self.device()['latest_event_id'])
+        self.login()
+        self.assertEqual(self.client.post('/devices/test-screen/settings', data={
+            'action': 'wake_plan', 'wake_timezone': 'UTC', 'wake_schedule': '08:00'}).status_code, 400)
+        for changes in ({'wake_timezone': 'unknown/zone'}, {'wake_schedule': ''},
+                        {'wake_schedule': '08:00,08:00'}, {'wake_schedule': '8:00'}):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.save_wake_policy(**changes).status_code, 400)
+                self.assertIsNone(self.device()['wake_policy_json'])
+        self.save_wake_policy()
+        # Screen validation errors and schedule validation errors stay independent.
+        self.assertEqual(self.settings(title='你好').status_code, 400)
+        self.assertIsNotNone(self.device()['wake_policy_json'])
+
+    def test_wake_columns_upgrade_is_safe_with_multiple_starting_workers(self):
+        self.check_in()
+        with self.app.app_context():
+            for column in ('wake_policy_json', 'wake_policy_version'):
+                get_db().execute(f'ALTER TABLE devices DROP COLUMN {column}')
+            get_db().commit()
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            list(workers.map(lambda _: create_app(self.config), range(2)))
+        self.assertIsNone(self.device()['wake_policy_json'])
+        self.assertEqual(self.device()['wake_policy_version'], 1)
+        self.assertEqual(self.device()['latest_event_id'], 'boot-1')
 
     def test_retention_deletes_history_but_keeps_device_configuration(self):
         self.check_in()

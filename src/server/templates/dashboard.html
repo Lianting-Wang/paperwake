@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% from '_estimate.html' import estimate_panel with context %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='wake-plan.css', v=asset_version('wake-plan.css')) }}">{% endblock %}
 {% block content %}
 <div class="page-heading">
   <div><p class="eyebrow">{{ t('设备概览') }}</p><h1>{{ t('电子纸设备管理') }}</h1><p class="muted">{{ t('页面刷新时间') }} <time datetime="{{ now }}">{{ t('需启用 JavaScript 显示本地时间') }}</time> · <a href="{{ url_for('dashboard') }}">{{ t('刷新状态') }}</a></p><p class="timezone-caption">{{ t('浏览器本地时区') }} · <span data-timezone-label>{{ t('需启用 JavaScript 显示本地时间') }}</span></p></div>
@@ -30,9 +31,16 @@
       <div><dt>{{ t('电源计划') }}</dt><dd>{{ device.payload.get('shutdown_intent', t('未知'))|ui_label }} <span class="muted">· {{ t('尚未确认实际断电') }}</span></dd></div>
     </dl></div>
   </div>
+  {% if device.wake_policy or device.wake_status %}<div class="wake-status"><h3>{{ t('唤醒计划与离线缓存') }}</h3><dl class="facts">
+    <div><dt>{{ t('服务器每日计划') }}</dt><dd>{% if device.wake_policy %}v{{ device.wake_policy_version }} · {{ device.wake_policy.timezone }} · {{ t('每天 {count} 次', count=device.wake_policy.schedule|length) }}{% else %}{{ t('尚未配置') }}{% endif %}</dd></div>
+    <div><dt>{{ t('设备本轮计划来源') }}</dt><dd>{% set source = device.wake_status.get('source') %}{{ t({'server': '服务器下载', 'cache': '本地缓存', 'local': '设备本地计划'}.get(source, '尚未上报')) }}{% if device.wake_status.get('version') %} · v{{ device.wake_status.version }}{% endif %}</dd></div>
+    {% if device.wake_status.get('valid_until') %}<div><dt>{{ t('本轮具体时间覆盖至') }}</dt><dd><time datetime="{{ device.wake_status.valid_until }}">{{ t('需启用 JavaScript 显示本地时间') }}</time></dd></div>{% endif %}
+    {% if device.wake_status.get('occurrence_count') is number %}<div><dt>{{ t('本轮具体时间数量') }}</dt><dd>{{ device.wake_status.occurrence_count }}</dd></div>{% endif %}
+    {% if device.wake_status.get('cached') is boolean %}<div><dt>{{ t('计划本地保存') }}</dt><dd>{{ t('已持久保存') if device.wake_status.cached else t('本轮未持久保存') }}</dd></div>{% endif %}
+  </dl><p class="caption">{{ t('具体时间用完后，设备仍会按缓存的完整每日计划计算。RTC 设置是否成功以本轮闹钟确认状态为准。') }}</p></div>{% endif %}
   {{ estimate_panel(device.estimate if device.estimate is defined else {}, compact=true) }}
   {% if device.failures %}<div class="fault-box"><strong>{{ t('设备上报的异常') }}</strong><ul>{% for failure in device.failures %}<li>{% if failure is mapping %}{{ failure.get('stage', t('未知阶段'))|ui_label }} · {{ failure.get('message', failure.get('error', failure)) }}{% else %}{{ failure }}{% endif %}</li>{% endfor %}</ul></div>{% endif %}
-  <div class="actions"><a class="primary" href="{{ url_for('settings', device_id=device.device_id) }}">{{ t('编辑内容与调试') }} <span>↗</span></a><a href="{{ url_for('history', device_id=device.device_id) }}">{{ t('查看报告历史') }} →</a></div>
+  <div class="actions"><a class="primary" href="{{ url_for('settings', device_id=device.device_id) }}">{{ t('编辑内容与唤醒计划') }} <span>↗</span></a><a href="{{ url_for('history', device_id=device.device_id) }}">{{ t('查看报告历史') }} →</a></div>
 </section>
 {% endfor %}
 <p class="caption">{{ t('管理地址') }}: {{ base_url }} · {{ t('设备状态以报告为依据；“计划休眠”不代表已确认实际断电。') }}</p>

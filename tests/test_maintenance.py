@@ -72,6 +72,8 @@ class ReleaseTests(unittest.TestCase):
             self.assertFalse((output / 'rootfs/boot').exists())
             self.assertEqual((output/'rootfs/opt/pisched/server_client.py').read_bytes(),
                              (ROOT/'src/scheduler/server_client.py').read_bytes())
+            self.assertEqual((output/'rootfs/opt/pisched/wake_plan.py').read_bytes(),
+                             (ROOT/'src/scheduler/wake_plan.py').read_bytes())
             self.assertFalse((output/'rootfs/etc/pisched/device.token').exists())
             self.assertEqual((output/'rootfs/home/wlt/IT8951/singlepage/page.c').read_bytes(),
                              (ROOT/'src/display/IT8951/singlepage/page.c').read_bytes())

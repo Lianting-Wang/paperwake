@@ -11,6 +11,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | `src/scheduler/pisched.py` | 开机任务、时间同步、下一次 RTC 闹钟和关机流程 |
+| `src/scheduler/wake_plan.py` | 服务与设备共用的每日计划、未来时点验证和 DST 推算 |
 | `src/tasks/collect_metrics.py` | 电池及 Wi-Fi 指标采集、server 内容电子纸刷新 |
 | `src/display/IT8951/singlepage/` | 屏幕初始化、布局和显示内容 |
 | `src/display/IT8951/lib/` | Waveshare 驱动、绘图和字库 |
@@ -29,7 +30,7 @@
 - 设备为 Pi Zero 2、PiSugar 3、IT8951 电子纸，系统为 Debian 13 ARM64；SSH 别名为 `pi`。
 - `pisched.service` 是开机执行一次的 oneshot 服务。周期刷新依靠 PiSugar 唤醒，不是常驻循环；DEBUG 模式下不会自行按时间表刷新。
 - 半小时配置用于测试。日常配置中的 08:00、12:00、16:00、18:00 只是示例，不能当作已确定的正式安排。
-- 时间表使用配置中的 IANA 时区，模板为 `America/New_York`；维护工具只接受每日计划 `repeat_mask=127`。
+- 时间表使用明确保存的 IANA 时区，模板为 `America/New_York`；维护工具只接受每日计划 `repeat_mask=127`。服务器首次由设备种子初始化，之后以管理页面保存的计划为准；设备离线采用缓存每日规则，缺失或损坏时回退配置。浏览器显示时区不修改计划时区，远程 debug 不随计划缓存。
 - 面向电池供电，配置模板的 `shutdown_even_if_alarm_set_failed` 保持 `true`。正常运行中失败应先记录并在次数和总时限内尝试通知，耗尽预算后仍请求系统安全关机；通知失败不能阻止关机。通知接口及未来电子纸错误状态见 [失败处理约定](docs/failure-handling.md)，通知命令默认留空，次数和时限已由调度器执行。
 - 当前显示目标为 1872×1404、VCOM −1.56 V、显示模式 1。改屏幕型号或参数前先核对硬件。
 - 显示路径由配置的 `display.path` 提供，发布包默认安装到 `/home/wlt/IT8951/epd`。调整部署路径、网络目标、接口或 socket 时，检查源码、配置、打包工具与文档中的所有使用处。

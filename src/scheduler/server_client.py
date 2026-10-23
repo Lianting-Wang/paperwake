@@ -27,8 +27,8 @@ SERVER_DEFAULTS = {
     'device_id': 'epaper-pi-zero2',
     'token_file': '/etc/pisched/device.token',
     'timeout_sec': 5,
-    'max_attempts': 3,
-    'total_timeout_sec': 20,
+    'max_attempts': 5,
+    'total_timeout_sec': 30,
     'backoff_sec': 1,
 }
 
@@ -64,14 +64,14 @@ def validate_server_config(raw):
     if (not isinstance(token_file, str) or not Path(token_file).is_absolute() or
             '..' in Path(token_file).parts):
         raise ValueError('server.token_file must be an absolute path')
-    for key, ceiling in (('timeout_sec', 5), ('total_timeout_sec', 20), ('backoff_sec', 5)):
+    for key, ceiling in (('timeout_sec', 5), ('total_timeout_sec', 30), ('backoff_sec', 5)):
         value = cfg[key]
         minimum = 0 if key == 'backoff_sec' else 0.001
         if (type(value) not in (int, float) or not math.isfinite(value) or
                 not minimum <= value <= ceiling):
             raise ValueError(f'invalid server.{key}')
-    if type(cfg['max_attempts']) is not int or not 1 <= cfg['max_attempts'] <= 3:
-        raise ValueError('server.max_attempts must be between 1 and 3')
+    if type(cfg['max_attempts']) is not int or not 1 <= cfg['max_attempts'] <= 5:
+        raise ValueError('server.max_attempts must be between 1 and 5')
     return cfg
 
 

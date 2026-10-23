@@ -27,6 +27,10 @@ paths = [
     '/var/log/pisched/pisched.log',
     '/var/log/pisched/epd.log',
 ]
+# New deployments have a shared planner and an optional downloaded plan cache.
+# Their absence on an older device is a valid pre-upgrade snapshot.
+paths.extend(name for name in ('/opt/pisched/wake_plan.py', '/var/lib/pisched/wake-plan.json')
+             if Path(name).is_file())
 display = Path('/home/wlt/IT8951')
 if display.is_dir():
     for folder in ('lib', 'singlepage'):

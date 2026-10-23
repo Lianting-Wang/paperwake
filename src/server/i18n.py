@@ -195,6 +195,41 @@ ENGLISH = {
         'Uses valid battery samples from the last 7 days, independently of the chart range.',
     '这是基于历史电量变化的推算，充电、电量校准和使用频率变化都会影响结果。':
         'This projection follows battery history. Charging, gauge calibration and changes in use can affect it.',
+    '断网后仍可安排唤醒': 'WAKE SCHEDULE · OFFLINE READY',
+    '每日唤醒计划': 'Daily wake schedule',
+    '服务器下发未来 24 小时内的全部时间，且至少五次。设备缓存完整每日计划，断网或缓存时间用完后仍可继续计算下一次唤醒。':
+        'The server sends every wake time in the next 24 hours, with at least five occurrences. The device caches the complete daily schedule to keep scheduling wakes offline, even after those dates run out.',
+    '计划时区（IANA）': 'Schedule time zone (IANA)',
+    '每日 HH:MM 按此时区解释；下方具体日期按浏览器当地时区显示。夏令时不存在的时刻跳过，重复时刻只执行第一次。':
+        'Daily HH:MM entries use this zone; dates below use your browser’s local zone. Daylight-saving gaps are skipped and repeated times run only on the first occurrence.',
+    '每日唤醒时间': 'Daily wake times',
+    '使用 24 小时 HH:MM 格式，以换行、空格或逗号分隔。保存此表不会修改屏幕内容或远程调试开关。':
+        'Use 24-hour HH:MM times, separated by newlines, spaces or commas. Saving this schedule preserves screen content and the remote debug setting.',
+    '保存唤醒计划': 'Save wake schedule', '接下来五次唤醒': 'Next five wakes',
+    '每天 {count} 次': '{count} wakes per day',
+    '本次可下载 {count} 个未来时间，覆盖至': '{count} future wake times available, through',
+    '尚未配置。升级后的设备首次报到时，会以设备当前完整每日时间表初始化；之后以此页面保存的计划为准。':
+        'No schedule saved yet. The upgraded device’s first check-in seeds its complete daily schedule; subsequent check-ins use the schedule saved here.',
+    '此处展示可下载的计划，并不代表设备已设置 RTC。实际闹钟与缓存状态请查看设备概览；PiSugar 故障仍可能导致无法唤醒。':
+        'This preview shows the downloadable plan. Check the device overview for the actual RTC confirmation and cache status. A PiSugar fault can still prevent waking.',
+    '唤醒计划与离线缓存': 'Wake schedule & offline cache', '服务器每日计划': 'Server daily schedule',
+    '设备本轮计划来源': 'Schedule used this cycle', '服务器下载': 'Downloaded from server',
+    '本地缓存': 'Local cache', '设备本地计划': 'Device local schedule', '尚未上报': 'Not reported yet',
+    '本轮具体时间覆盖至': 'This cycle’s dated plan through', '本轮具体时间数量': 'Dated occurrences this cycle',
+    '内容、调试与唤醒设置': 'CONTENT, DEBUG & WAKE SETTINGS',
+    '编辑内容与唤醒计划': 'Edit content & wake schedule',
+    '计划本地保存': 'Schedule saved locally', '已持久保存': 'Saved to disk',
+    '本轮未持久保存': 'Not saved to disk this cycle',
+    '具体时间用完后，设备仍会按缓存的完整每日计划计算。RTC 设置是否成功以本轮闹钟确认状态为准。':
+        'After the dated occurrences run out, the device still calculates wakes from its cached daily schedule. The current cycle’s RTC confirmation shows whether the alarm was set.',
+    '尚未配置': 'Not configured',
+    '唤醒时区必须是有效的 IANA 时区。': 'Enter a valid IANA time zone.',
+    '请填写 1 至 1440 个每日唤醒时间。': 'Enter 1 to 1440 daily wake times.',
+    '唤醒时间须使用 HH:MM 格式，范围为 00:00 至 23:59。': 'Use HH:MM wake times from 00:00 to 23:59.',
+    '每日唤醒时间不能重复。': 'Daily wake times must be unique.',
+    '唤醒计划无效，请检查时区和时间表。': 'Check the wake schedule’s time zone and times.',
+    '唤醒计划已保存，将在设备下次成功报到时下载并缓存。':
+        'Wake schedule saved. The device will download and cache it at its next successful check-in.',
 }
 
 

@@ -52,7 +52,10 @@
   "repeat_mask": 127,
   "pisugar": {
     "uds_path": "/tmp/pisugar-server.sock",
-    "timeout_sec": 2
+    "timeout_sec": 2,
+    "ready_timeout_sec": 45,
+    "max_attempts": 5,
+    "recovery_attempts": 5
   },
   "task": {
     "command": "/usr/bin/python3 /opt/pisched/collect_metrics.py",
@@ -60,7 +63,8 @@
   },
   "shutdown": {
     "command": "/sbin/shutdown -h now",
-    "shutdown_even_if_alarm_set_failed": true
+    "shutdown_even_if_alarm_set_failed": true,
+    "max_attempts": 3
   },
   "log_file": "/var/log/pisched/pisched.log",
   "timezone": "America/New_York",
@@ -68,7 +72,7 @@
   "metrics_file": "/var/lib/pisched/metrics.json",
   "notification": {
     "command": [],
-    "max_attempts": 3,
+    "max_attempts": 5,
     "timeout_sec": 5,
     "total_timeout_sec": 20,
     "backoff_sec": 1
@@ -83,6 +87,9 @@
   "server": {
     "base_url": "http://192.168.76.71:8088",
     "device_id": "epaper-pi-zero2",
-    "token_file": "/etc/pisched/device.token"
-  }
+    "token_file": "/etc/pisched/device.token",
+    "max_attempts": 5,
+    "total_timeout_sec": 30
+  },
+  "wake_plan_file": "/var/lib/pisched/wake-plan.json"
 }

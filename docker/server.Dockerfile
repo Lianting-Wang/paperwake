@@ -5,6 +5,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && useradd --system --uid 10001 --create-home epaper \
     && mkdir -p /data && chown epaper:epaper /data
 COPY src/server /app/src/server
+COPY src/scheduler/wake_plan.py /app/src/scheduler/wake_plan.py
 USER epaper
 ENV DATABASE=/data/server.sqlite3 PYTHONUNBUFFERED=1
 EXPOSE 8088

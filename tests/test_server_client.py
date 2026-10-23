@@ -87,7 +87,7 @@ class ClientTests(unittest.TestCase):
             client.validate_display(value['display'])
 
     def test_transient_status_retried_but_auth_and_bad_request_not_retried(self):
-        for status, attempts in ((503, 3), (401, 1), (403, 1), (400, 1), (302, 1)):
+        for status, attempts in ((503, 5), (401, 1), (403, 1), (400, 1), (302, 1)):
             observed = []
             def reply(handler):
                 observed.append(handler.path)
@@ -99,6 +99,16 @@ class ClientTests(unittest.TestCase):
                 self.assertEqual(error.exception.status_code, status)
                 self.assertNotIn('private', str(error.exception))
                 self.assertEqual(len(observed), attempts)
+
+    def test_transient_server_can_recover_on_fifth_attempt(self):
+        observed = []
+        def reply(handler):
+            observed.append(handler.path)
+            respond(handler, {'debug': False} if len(observed) == 5 else {},
+                    200 if len(observed) == 5 else 503)
+        with server(reply) as url:
+            self.assertFalse(self.make_client(url).check_in({})['debug'])
+        self.assertEqual(len(observed), 5)
 
     def test_network_refused_retries_and_has_finite_deadline(self):
         with socket.socket() as sock:
@@ -185,7 +195,7 @@ class ClientTests(unittest.TestCase):
         with server(reply) as url:
             with self.assertRaises(client.ServerError):
                 self.make_client(url).check_in({})
-        self.assertEqual(len(observed), 3)
+        self.assertEqual(len(observed), 5)
 
     def test_invalid_configuration_prevents_dns_and_credentials_in_url(self):
         for url in ('http://example.com:8088', 'ftp://127.0.0.1',
@@ -194,8 +204,10 @@ class ClientTests(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 self.make_client(url)
         client.validate_server_config({'base_url': 'http://[::1]:8088'})
-        for overrides in ({'max_attempts': 4}, {'timeout_sec': 6},
-                          {'total_timeout_sec': 21}, {'backoff_sec': -1},
+        self.assertEqual(client.validate_server_config({})['max_attempts'], 5)
+        self.assertEqual(client.validate_server_config({})['total_timeout_sec'], 30)
+        for overrides in ({'max_attempts': 6}, {'timeout_sec': 6},
+                          {'total_timeout_sec': 31}, {'backoff_sec': -1},
                           {'timeout_sec': float('nan')}):
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):
                 client.validate_server_config(overrides)

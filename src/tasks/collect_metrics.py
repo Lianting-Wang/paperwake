@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 
 source_modules = Path(__file__).resolve().parents[1] / 'scheduler'
 if source_modules.is_dir():
@@ -29,27 +30,64 @@ def parse_wifi(output):
     return numeric(match[1], -150, 0)
 
 
+def task_budget(cfg):
+    """Use the parent's actual allowance, leaving time to persist the sample."""
+    seconds = numeric(os.environ.get('PISCHED_TASK_BUDGET_SEC', cfg['task']['timeout_sec']),
+                      0, cfg['task']['timeout_sec'])
+    return Budget(max(0, seconds - 2))
+
+
+def collect_wifi(cfg, budget):
+    """Retry transient command/association failures within one six-second cap."""
+    wifi_budget = Budget(deadline=min(budget.deadline, time.monotonic() + 6))
+    last = TimeoutError('Wi-Fi collection budget exhausted')
+    for attempt in range(3):
+        if wifi_budget.remaining() <= 1:
+            break
+        try:
+            result = run_command(['iwconfig', cfg['network']['interface']],
+                                 min(3, wifi_budget.remaining()))
+            if result.returncode:
+                raise RuntimeError(f'iwconfig failed (exit status {result.returncode})')
+            return parse_wifi(result.output)
+        except (OSError, RuntimeError, ValueError) as exc:
+            last = exc
+        if attempt < 2:
+            wifi_budget.sleep(.25)
+    raise last
+
+
 def collect(cfg, event_id):
-    budget = Budget(cfg['task']['timeout_sec'])
     data = {'schema_version': 2, 'event_id': event_id,
             'timestamp': datetime.now(timezone.utc).isoformat(), 'values': {}, 'failures': []}
     values = data['values']
     def fail(stage, exc):
         data['failures'].append({'stage': stage, 'message': str(exc)[:300]})
-    client = PiSugarClient(cfg['pisugar'], budget)
+    try:
+        budget = task_budget(cfg)
+    except (ValueError, TypeError) as exc:
+        fail('budget', exc)
+        budget = Budget(0)
+    # Measurements share a deadline before the render reservation. Extra retries
+    # must not consume the screen's configured allowance, even on a short cycle.
+    measurement_budget = Budget(deadline=budget.deadline - cfg['display']['timeout_sec'])
+    client = PiSugarClient(cfg['pisugar'], measurement_budget)
     for field, key, low, high in [('battery_percent', 'battery', 0, 100),
                                   ('battery_voltage', 'battery_v', 0, 10),
                                   ('temperature', 'temperature', -40, 150)]:
         try:
-            values[field] = numeric(client.get(key), low, high)
+            # Validate inside the client's one retry loop, rather than wrapping a
+            # retrying get() in another loop and multiplying socket attempts.
+            values[field] = client.get(key, validator=lambda value: numeric(value, low, high))
+            if field == 'battery_percent':
+                # Battery estimates need the successful reading's time, not the
+                # beginning of a potentially long initialization/retry sequence.
+                data['timestamp'] = datetime.now(timezone.utc).isoformat()
         except Exception as exc:
             values[field] = None
             fail(key, exc)
     try:
-        result = run_command(['iwconfig', cfg['network']['interface']], min(3, budget.remaining()))
-        if result.returncode:
-            raise RuntimeError('iwconfig failed')
-        values['wifi_rssi'] = parse_wifi(result.output)
+        values['wifi_rssi'] = collect_wifi(cfg, measurement_budget)
     except Exception as exc:
         values['wifi_rssi'] = None
         fail('wifi', exc)
@@ -68,7 +106,10 @@ def collect(cfg, event_id):
         for index, row in enumerate(page['rows'], 1):
             env[f'PISCHED_PAGE_LABEL_{index}'] = row['label']
             env[f'PISCHED_PAGE_VALUE_{index}'] = row['value']
-        result = run_command([cfg['display']['path']], min(cfg['display']['timeout_sec'], budget.remaining()), env=env)
+        display_seconds = min(cfg['display']['timeout_sec'], budget.remaining())
+        if display_seconds <= 1:
+            raise TimeoutError('Display execution budget exhausted')
+        result = run_command([cfg['display']['path']], display_seconds, env=env)
         data['display_returncode'] = result.returncode
         if result.returncode:
             fail('display', f'exit status {result.returncode}')

@@ -18,6 +18,8 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash
 
+from src.scheduler.wake_plan import make_wake_plan, validate_policy
+
 from .i18n import LANGUAGE_COOKIE, LANGUAGES, get_language, t
 from .history import build_history_data, cycle_has_failures, merge_cycle
 from .battery import estimate_battery
@@ -188,7 +190,8 @@ def create_app(config=None):
                 device_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL,
                 debug INTEGER NOT NULL DEFAULT 0, content_version INTEGER NOT NULL DEFAULT 1,
                 display_json TEXT NOT NULL, latest_event_id TEXT, last_seen_at TEXT,
-                latest_payload TEXT, latest_report_at TEXT, retention_days INTEGER
+                latest_payload TEXT, latest_report_at TEXT, retention_days INTEGER,
+                wake_policy_json TEXT, wake_policy_version INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS events (
                 device_id TEXT NOT NULL REFERENCES devices(device_id), event_id TEXT NOT NULL,
@@ -206,8 +209,13 @@ def create_app(config=None):
         # Multiple Gunicorn workers can start against the same existing database.
         # Acquire the schema-write lock before checking whether the column exists.
         db.execute('BEGIN IMMEDIATE')
-        if 'retention_days' not in {row['name'] for row in db.execute('PRAGMA table_info(devices)')}:
+        columns = {row['name'] for row in db.execute('PRAGMA table_info(devices)')}
+        if 'retention_days' not in columns:
             db.execute('ALTER TABLE devices ADD COLUMN retention_days INTEGER')
+        if 'wake_policy_json' not in columns:
+            db.execute('ALTER TABLE devices ADD COLUMN wake_policy_json TEXT')
+        if 'wake_policy_version' not in columns:
+            db.execute('ALTER TABLE devices ADD COLUMN wake_policy_version INTEGER NOT NULL DEFAULT 1')
         db.execute('''INSERT INTO devices(device_id,token_hash,display_json) VALUES(?,?,?)
                       ON CONFLICT(device_id) DO UPDATE SET token_hash=excluded.token_hash''',
                    (app.config['DEVICE_ID'], token_hash(app.config['DEVICE_TOKEN']), json.dumps(DEFAULT_DISPLAY)))
@@ -321,6 +329,12 @@ def create_app(config=None):
         payload, device = device_request()
         if timestamp(payload.get('started_at')) is None:
             abort(400, 'started_at must be an ISO timestamp with a UTC offset.')
+        wake_policy = None
+        if 'wake_schedule' in payload:
+            try:
+                wake_policy = validate_policy(payload['wake_schedule'])
+            except ValueError as exc:
+                abort(400, str(exc))
         db = get_db()
         received = now().isoformat()
         inserted = db.execute('INSERT OR IGNORE INTO event_keys VALUES(?,?,?)',
@@ -343,9 +357,19 @@ def create_app(config=None):
                        (payload['event_id'], json.dumps(current), received, device['device_id']))
         else:
             db.execute('UPDATE devices SET last_seen_at=? WHERE device_id=?', (received, device['device_id']))
+        if wake_policy is not None:
+            # A device can seed an unconfigured server once. Administrator edits
+            # and later check-ins always keep the authoritative saved policy.
+            db.execute('UPDATE devices SET wake_policy_json=? WHERE device_id=? AND wake_policy_json IS NULL',
+                       (json.dumps(wake_policy), device['device_id']))
         db.commit()
-        return jsonify(debug=bool(device['debug']), content_version=device['content_version'],
-                       display=json.loads(device['display_json']))
+        device = db.execute('SELECT * FROM devices WHERE device_id=?', (device['device_id'],)).fetchone()
+        reply = dict(debug=bool(device['debug']), content_version=device['content_version'],
+                     display=json.loads(device['display_json']))
+        if device['wake_policy_json'] is not None:
+            reply['wake_plan'] = make_wake_plan(json.loads(device['wake_policy_json']), now(),
+                                                version=device['wake_policy_version'])
+        return jsonify(reply)
 
     @app.post('/api/v1/reports')
     def report():
@@ -431,6 +455,9 @@ def create_app(config=None):
             item['failures'] = item['payload'].get('failures') or item['payload'].get('pending_failures', [])
             item['expected_next_run'] = expected_next_run(item['payload'])
             item['estimate'] = estimate_battery(get_db(), item['device_id'], current)
+            item['wake_policy'] = json.loads(item.pop('wake_policy_json') or 'null')
+            wake = item['payload'].get('wake_plan', {})
+            item['wake_status'] = wake if isinstance(wake, dict) else {}
             devices.append(item)
         return render_template('dashboard.html', devices=devices, base_url=app.config['BASE_URL'], now=current.isoformat())
 
@@ -444,7 +471,38 @@ def create_app(config=None):
         display = json.loads(device['display_json'])
         debug = bool(device['debug'])
         error = None
-        if request.method == 'POST':
+        wake_policy = json.loads(device['wake_policy_json'] or 'null')
+        wake_timezone = wake_policy['timezone'] if wake_policy else ''
+        wake_schedule = '\n'.join(wake_policy['schedule']) if wake_policy else ''
+        wake_error = None
+        if request.method == 'POST' and request.form.get('action') == 'wake_plan':
+            wake_timezone = request.form.get('wake_timezone', '').strip()
+            wake_schedule = request.form.get('wake_schedule', '')
+            try:
+                policy = validate_policy({'timezone': wake_timezone,
+                    'schedule': [item for item in re.split(r'[,，;；\s]+', wake_schedule.strip()) if item]})
+            except ValueError as exc:
+                messages = {
+                    'Wake timezone must be an IANA timezone.': '唤醒时区必须是有效的 IANA 时区。',
+                    'Wake schedule must contain 1 to 1440 daily times.': '请填写 1 至 1440 个每日唤醒时间。',
+                    'Wake times must use HH:MM, from 00:00 to 23:59.': '唤醒时间须使用 HH:MM 格式，范围为 00:00 至 23:59。',
+                    'Wake times must not repeat.': '每日唤醒时间不能重复。',
+                }
+                wake_error = t(messages.get(str(exc), '唤醒计划无效，请检查时区和时间表。'))
+            else:
+                # Decide the version while holding the write lock so two admin
+                # requests cannot accidentally reuse a version for different data.
+                db.execute('BEGIN IMMEDIATE')
+                saved = db.execute('SELECT wake_policy_json,wake_policy_version FROM devices WHERE device_id=?',
+                                   (device_id,)).fetchone()
+                changed = policy != json.loads(saved['wake_policy_json'] or 'null')
+                version = saved['wake_policy_version'] + int(changed and saved['wake_policy_json'] is not None)
+                db.execute('UPDATE devices SET wake_policy_json=?,wake_policy_version=? WHERE device_id=?',
+                           (json.dumps(policy), version, device_id))
+                db.commit()
+                flash('唤醒计划已保存，将在设备下次成功报到时下载并缓存。', 'success')
+                return redirect(url_for('settings', device_id=device_id))
+        elif request.method == 'POST':
             debug = request.form.get('debug') == 'on'
             display = {'title': request.form.get('title', ''), 'status': request.form.get('status', ''), 'rows': []}
             for i in range(6):
@@ -463,7 +521,10 @@ def create_app(config=None):
                 db.commit()
                 flash('设置已保存，将在设备下次报到时生效。', 'success')
                 return redirect(url_for('dashboard'))
-        return render_template('settings.html', device=device, display=display, debug=debug, error=error), 400 if error else 200
+        wake_plan = make_wake_plan(wake_policy, now(), device['wake_policy_version']) if wake_policy else None
+        return render_template('settings.html', device=device, display=display, debug=debug, error=error,
+                               wake_timezone=wake_timezone, wake_schedule=wake_schedule,
+                               wake_plan=wake_plan, wake_error=wake_error), 400 if error or wake_error else 200
 
     @app.get('/devices/<device_id>/history')
     @login_required

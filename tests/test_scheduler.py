@@ -188,8 +188,8 @@ class NotificationTests(unittest.TestCase):
     def test_failed_attempts_stop_at_limit(self):
         with patch.object(s, 'run_command', return_value=s.Result(1)) as run:
             result = s.notify_failure(self.cfg, self.state, s.Budget(20))
-        self.assertEqual(result['attempts'], 3)
-        self.assertEqual(run.call_count, 3)
+        self.assertEqual(result['attempts'], 5)
+        self.assertEqual(run.call_count, 5)
 
     def test_total_budget_and_cleanup_are_included(self):
         clock = [0.0]
@@ -199,15 +199,15 @@ class NotificationTests(unittest.TestCase):
         self.cfg['notification'].update(timeout_sec=5, total_timeout_sec=6)
         with patch.object(s.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(s, 'run_command', side_effect=hang):
             result = s.notify_failure(self.cfg, self.state, s.Budget(6))
-        self.assertEqual(result['attempts'], 1)
+        self.assertEqual(result['attempts'], 3)
         self.assertLessEqual(clock[0], 6)
 
     def test_notification_spawn_failure_and_low_battery(self):
         with patch.object(s, 'run_command', side_effect=FileNotFoundError) as run:
-            self.assertEqual(s.notify_failure(self.cfg, self.state, s.Budget(20))['attempts'], 3)
+            self.assertEqual(s.notify_failure(self.cfg, self.state, s.Budget(20))['attempts'], 5)
             self.state['low_battery'] = True
             self.assertEqual(s.notify_failure(self.cfg, self.state, s.Budget(20))['attempts'], 0)
-        self.assertEqual(run.call_count, 3)
+        self.assertEqual(run.call_count, 5)
 
 
 class CycleTests(unittest.TestCase):
@@ -216,12 +216,14 @@ class CycleTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         folder = Path(self.temp.name)
         self.cfg = s.validate_config({'schedule': ['08:00'], 'state_file': str(folder/'state.json'),
-                                     'metrics_file': str(folder/'metrics.json'), 'outbox_file': str(folder/'outbox.json'), 'log_file': str(folder/'run.log')})
+                                     'metrics_file': str(folder/'metrics.json'), 'outbox_file': str(folder/'outbox.json'),
+                                     'wake_plan_file': str(folder/'wake-plan.json'), 'log_file': str(folder/'run.log')})
 
     def effects(self):
         stack = ExitStack()
         self.addCleanup(stack.close)
         mocks = {}
+        stack.enter_context(patch.object(s.Budget, 'sleep'))
         for name in ('wait_for_pisugar', 'prepare_time', 'program_alarm'):
             mocks[name] = stack.enter_context(patch.object(s, name))
         mocks['client'] = stack.enter_context(patch.object(s, 'PiSugarClient'))
@@ -401,7 +403,7 @@ class PiSugarProtocolTests(unittest.TestCase):
     def test_repeat_failure_stops_at_max_attempts(self):
         with patch.object(self.client,'cmd',return_value='rtc_pi2rtc: I/O error') as cmd:
             with self.assertRaises(RuntimeError):self.client.done('rtc_pi2rtc')
-        self.assertEqual(cmd.call_count,3)
+        self.assertEqual(cmd.call_count,5)
 
     def test_read_error_is_not_measurement(self):
         with patch.object(self.client,'cmd',side_effect=['battery: I/O error', 'battery: 55']):

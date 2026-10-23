@@ -5,9 +5,9 @@
 ## 一轮数据流
 
 1. 有界等待 PiSugar，读取电量，NTP 优先校时并核对 RTC。
-2. 向配置中的数字 IP 和端口报到，取得本轮 remote debug 与固定格式内容。获取不到则保留屏幕原画面、跳过任务。
+2. 向配置中的数字 IP 和端口报到，取得本轮 remote debug、固定格式内容及未来唤醒计划并原子缓存。获取不到则保留屏幕原画面、跳过任务。
 3. 内容有效时，采集本地电池、电压、温度和 Wi-Fi，记录本次 HTTP 耗时，刷新电子纸。无 CSV 或 ping 采集。
-4. 设置、读回核验下一次 RTC 闹钟；汇总错误并执行可选通知/错误展示。
+4. 从本轮计划、缓存或配置中选择下一次，在总预算内恢复 PiSugar/校时并设置、读回核验 RTC 闹钟；汇总错误并执行可选通知/错误展示。
 5. 把关机意图、闹钟、指标和错误原子加入本地报告队列；有连接且非低电量时，在统一报告期限内发送队列。
 6. 保存状态，按本地 DEBUG 或本轮远程 debug 决定留机，否则安全关机。正常关机后由 RTC 再次唤醒。
 
@@ -19,6 +19,7 @@ server 无法通过关机意图证明实际断电；实际关机请求结果在�
 | --- | --- |
 | `src/scheduler/pisched.py` | `/opt/pisched/pisched.py`：周期、时钟、闹钟、失败收尾 |
 | `src/scheduler/server_client.py` | `/opt/pisched/server_client.py`：有界 HTTP、内容校验、持久报告队列 |
+| `src/scheduler/wake_plan.py` | `/opt/pisched/wake_plan.py`：设备与服务器共用的时区、DST 和未来计划计算 |
 | `src/tasks/collect_metrics.py` | `/opt/pisched/collect_metrics.py`：本地指标和一次屏幕刷新 |
 | `config/*.json` | 显式选定后部署到 `/etc/pisched/config.json` |
 | `deploy/systemd/pisched.service` | `/etc/systemd/system/pisched.service` |
@@ -27,7 +28,7 @@ server 无法通过关机意图证明实际断电；实际关机请求结果在�
 
 设备 token 位于配置的独立文件，不进入配置环境、日志或 Git。发布包不含 token，安装时单独写入并限制为 root 可读。
 
-采集任务通过环境读取已校验配置、事件 ID、页面及 HTTP 耗时。显示进程消费相同一份电池样本，并通过 `PISCHED_PAGE_TITLE`、`PISCHED_PAGE_STATUS`、`PISCHED_PAGE_LABEL_1..6`、`PISCHED_PAGE_VALUE_1..6` 读取内容。C 在硬件初始化/清屏之前验证 ASCII 与长度；内容无效不刷新。
+采集任务通过环境读取已校验配置、事件 ID、页面、HTTP 耗时和父进程本轮实际任务期限。显示进程消费相同一份电池样本，并通过 `PISCHED_PAGE_TITLE`、`PISCHED_PAGE_STATUS`、`PISCHED_PAGE_LABEL_1..6`、`PISCHED_PAGE_VALUE_1..6` 读取内容。C 在硬件初始化/清屏之前验证 ASCII 与长度；内容无效不刷新。
 
 ## 留机与兜底
 

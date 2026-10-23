@@ -20,27 +20,30 @@ from dataclasses import dataclass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from server_client import ServerClient, ReportOutbox, validate_display, validate_server_config
+from wake_plan import compute_next_run, validate_policy, validate_wake_plan
 
-ALARM_RESERVE_SECONDS = 30
+ALARM_RESERVE_SECONDS = 60
 DEBUG_PATHS = ('/boot/DEBUG', '/boot/firmware/DEBUG')
 DEFAULTS = {
     'timezone': 'America/New_York',
     'state_file': '/var/lib/pisched/state.json',
     'metrics_file': '/var/lib/pisched/metrics.json',
     'outbox_file': '/var/lib/pisched/outbox.json',
+    'wake_plan_file': '/var/lib/pisched/wake-plan.json',
     'log_file': '/var/log/pisched/pisched.log',
-    'pisugar': {'uds_path': '/tmp/pisugar-server.sock', 'timeout_sec': 2, 'ready_timeout_sec': 15, 'max_attempts': 3, 'retry_delay_sec': 1},
+    'pisugar': {'uds_path': '/tmp/pisugar-server.sock', 'timeout_sec': 2, 'ready_timeout_sec': 45,
+                'max_attempts': 5, 'retry_delay_sec': 1, 'recovery_attempts': 5},
     'task': {'command': '/usr/bin/python3 /opt/pisched/collect_metrics.py', 'timeout_sec': 120},
     'shutdown': {'command': '/sbin/shutdown -h now', 'shutdown_even_if_alarm_set_failed': True,
-                 'max_attempts': 2, 'timeout_sec': 5},
+                 'max_attempts': 3, 'timeout_sec': 5},
     'network': {'interface': 'wlan0'},
     'server': {'base_url': 'http://192.168.76.71:8088', 'device_id': 'epaper-pi-zero2',
-               'token_file': '/etc/pisched/device.token', 'timeout_sec': 5, 'max_attempts': 3,
-               'total_timeout_sec': 20, 'backoff_sec': 1},
+               'token_file': '/etc/pisched/device.token', 'timeout_sec': 5, 'max_attempts': 5,
+               'total_timeout_sec': 30, 'backoff_sec': 1},
     'display': {'path': '/home/wlt/IT8951/epd', 'timeout_sec': 45},
     'runtime': {'max_seconds': 240, 'time_sync_seconds': 30, 'shutdown_margin_seconds': 90,
                 'low_battery_percent': 10, 'rtc_min_year': 2025},
-    'notification': {'command': [], 'max_attempts': 3, 'timeout_sec': 5,
+    'notification': {'command': [], 'max_attempts': 5, 'timeout_sec': 5,
                      'total_timeout_sec': 20, 'backoff_sec': 1},
     'failure_display': {'command': [], 'timeout_sec': 10},
 }
@@ -88,22 +91,16 @@ def validate_config(raw):
             cfg[key] = dict(default, **value)
         else:
             cfg[key] = raw.get(key, default)
-    schedule = raw.get('schedule')
-    if (not isinstance(schedule, list) or not schedule or
-            any(not isinstance(t, str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', t) for t in schedule)
-            or len(set(schedule)) != len(schedule)):
-        raise ValueError('schedule must contain distinct HH:MM times')
+    policy = validate_policy({'timezone': cfg['timezone'], 'schedule': raw.get('schedule')})
     if type(raw.get('repeat_mask', 127)) is not int or raw.get('repeat_mask', 127) != 127:
         raise ValueError('only daily schedules (repeat_mask=127) are supported')
-    cfg.update(schedule=list(schedule), repeat_mask=127)
-    if not isinstance(cfg['timezone'], str):
-        raise ValueError('timezone must be a zone name')
-    ZoneInfo(cfg['timezone'])
-    for key in ('state_file', 'metrics_file', 'outbox_file', 'log_file'):
+    cfg.update(policy, repeat_mask=127)
+    paths = ('state_file', 'metrics_file', 'outbox_file', 'wake_plan_file', 'log_file')
+    for key in paths:
         if not isinstance(cfg[key], str) or not Path(cfg[key]).is_absolute() or '..' in Path(cfg[key]).parts:
             raise ValueError(f'{key} must be an absolute path')
-    if len({cfg[k] for k in ('state_file', 'metrics_file', 'outbox_file', 'log_file')}) != 4:
-        raise ValueError('state, metrics, outbox and log must use distinct paths')
+    if len({cfg[k] for k in paths}) != len(paths):
+        raise ValueError('state, metrics, outbox, wake plan and log must use distinct paths')
     for section, key in [('pisugar', 'uds_path'), ('display', 'path')]:
         if not isinstance(cfg[section][key], str) or not Path(cfg[section][key]).is_absolute() or '..' in Path(cfg[section][key]).parts:
             raise ValueError(f'{section}.{key} must be an absolute path')
@@ -124,14 +121,15 @@ def validate_config(raw):
         raise ValueError('battery operation requires shutdown_even_if_alarm_set_failed=true; use DEBUG for maintenance')
     for section in ('pisugar', 'task', 'shutdown', 'network', 'display', 'runtime', 'notification', 'failure_display', 'server'):
         for key, value in cfg[section].items():
-            if key.endswith(('_sec', '_seconds')) or key in ('max_attempts', 'max_seconds', 'rtc_min_year', 'low_battery_percent'):
+            if key.endswith(('_sec', '_seconds')) or key in ('max_attempts', 'recovery_attempts', 'max_seconds', 'rtc_min_year', 'low_battery_percent'):
                 minimum = 0 if key in ('backoff_sec', 'low_battery_percent') else 1
                 if type(value) is not int or not minimum <= value <= 3600:
                     raise ValueError(f'invalid positive integer: {section}.{key}')
     for section in ('task', 'shutdown', 'display', 'notification', 'failure_display'):
         if cfg[section]['timeout_sec'] < 2:
             raise ValueError(f'{section}.timeout_sec must reserve process cleanup time (>=2)')
-    if cfg['notification']['max_attempts'] > 10 or cfg['shutdown']['max_attempts'] > 3 or cfg['pisugar']['max_attempts'] > 3:
+    if (cfg['notification']['max_attempts'] > 10 or cfg['shutdown']['max_attempts'] > 3
+            or cfg['pisugar']['max_attempts'] > 5 or cfg['pisugar']['recovery_attempts'] > 5):
         raise ValueError('too many retry attempts')
     if not 0 <= cfg['runtime']['low_battery_percent'] <= 100 or not 2020 <= cfg['runtime']['rtc_min_year'] <= 2099:
         raise ValueError('invalid battery threshold or RTC minimum year')
@@ -154,28 +152,6 @@ def cleanup_reserve(cfg):
 
 def load_config(path):
     return validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
-
-
-def compute_next_run(now, schedule):
-    """Skip nonexistent wall times; run a repeated DST wall time only at fold=0."""
-    if not schedule:
-        raise ValueError('empty schedule')
-    candidates = []
-    for day in range(3):
-        for value in schedule:
-            if not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', value):
-                raise ValueError(f'invalid HH:MM: {value}')
-            hh, mm = map(int, value.split(':'))
-            cand = (now + timedelta(days=day)).replace(hour=hh, minute=mm, second=0, microsecond=0, fold=0)
-            if now.tzinfo is None:
-                if cand > now:
-                    candidates.append(cand)
-            else:
-                restored = datetime.fromtimestamp(cand.timestamp(), now.tzinfo)
-                if (restored.replace(tzinfo=None) == cand.replace(tzinfo=None) and restored.fold == 0
-                        and cand.timestamp() > now.timestamp()):
-                    candidates.append(cand)
-    return min(candidates, key=lambda d: d.timestamp() if d.tzinfo else d)
 
 
 def iso8601_with_tz_ms(dt):
@@ -312,16 +288,16 @@ class PiSugarClient:
                     self.budget.sleep(self.cfg['retry_delay_sec'])
         raise last
 
-    def get(self, key):
+    def get(self, key, validator=None):
         def exchange():
             response = self.cmd('get ' + key)
             prefix = key + ': '
             if not response.startswith(prefix):
                 raise RuntimeError(f'invalid {key} response: {response[:200]}')
             value = response[len(prefix):]
-            if 'error' in value.lower():
+            if any(text in value.lower() for text in ('error', 'not connected', 'not ready')):
                 raise RuntimeError(value[:200])
-            return value
+            return validator(value) if validator is not None else value
         return self.retry(exchange, 'get ' + key)
 
     def done(self, command):
@@ -364,17 +340,18 @@ def wait_for_pisugar(client):
     last = 'not ready'
     original = client.budget
     client.budget = budget
-    while budget.remaining() > 0:
-        try:
-            if client.get('model') != 'PiSugar 3':
-                raise RuntimeError('unexpected PiSugar model')
-            rtc_datetime(client)
-            client.budget = original
-            return
-        except (OSError, ValueError, RuntimeError) as exc:
-            last = str(exc)
-            budget.sleep(1)
-    client.budget = original
+    try:
+        while budget.remaining() > 0:
+            try:
+                if client.get('model') != 'PiSugar 3':
+                    raise RuntimeError('unexpected PiSugar model')
+                rtc_datetime(client)
+                return
+            except (OSError, ValueError, RuntimeError) as exc:
+                last = str(exc)
+                budget.sleep(1)
+    finally:
+        client.budget = original
     raise RuntimeError('PiSugar not ready: ' + last)
 
 
@@ -409,6 +386,7 @@ def prepare_time(cfg, client, state, previous, budget):
 
 
 def program_alarm(cfg, client, state):
+    state['alarm_confirmed'] = False
     if not state['time_trusted']:
         raise RuntimeError('cannot confirm a wake alarm without trusted time')
     if abs((rtc_datetime(client) - datetime.now(timezone.utc)).total_seconds()) > 5:
@@ -418,6 +396,8 @@ def program_alarm(cfg, client, state):
     # ZoneInfo wall-clock addition can cross a repeated hour or reset fold=1.
     # The shutdown margin is elapsed time, independent of DST clock changes.
     earliest = datetime.fromtimestamp(now.timestamp() + margin.total_seconds(), now.tzinfo)
+    # The daily policy remains authoritative against the device's trusted clock.
+    # A server clock jump or an expired absolute list must never skip valid days.
     next_dt = compute_next_run(earliest, cfg['schedule'])
     state['next_run'] = next_dt.isoformat()
     # A daily UTC alarm can ring a day early across a 25h DST interval, or when
@@ -438,6 +418,69 @@ def program_alarm(cfg, client, state):
     state['alarm_confirmed'] = True
 
 
+def recover_alarm(cfg, client, state, previous, budget, prepared=False):
+    """Retry the complete RTC transaction, sharing the existing work deadline."""
+    last = RuntimeError('PiSugar recovery budget exhausted')
+    result = state['pisugar_recovery'] = {'status': 'budget_exhausted', 'attempts': 0, 'errors': []}
+    for attempt in range(cfg['pisugar']['recovery_attempts']):
+        if budget.remaining() <= 0:
+            break
+        result['attempts'] += 1
+        try:
+            # A partially written alarm must be preceded by a new readiness and
+            # clock check. Never bypass this by merely declaring time trusted.
+            if not prepared or attempt:
+                wait_for_pisugar(client)
+                prepare_time(cfg, client, state, previous, budget)
+            program_alarm(cfg, client, state)
+            result['status'] = 'confirmed'
+            return
+        except (OSError, ValueError, RuntimeError) as exc:
+            last = exc
+            result['errors'].append(str(exc)[:500])
+            result['status'] = 'failed'
+            log(f'[pisugar] recovery {attempt+1} failed: {exc}', cfg['log_file'])
+            if attempt + 1 < cfg['pisugar']['recovery_attempts']:
+                budget.sleep(cfg['pisugar']['retry_delay_sec'])
+    if budget.remaining() <= 0:
+        result['status'] = 'budget_exhausted'
+    raise RuntimeError('cannot confirm wake alarm after recovery: ' + str(last))
+
+
+def load_wake_plan(path):
+    """Missing cache is expected; a damaged cache must be reported explicitly."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    if path.stat().st_size > 131072:
+        raise ValueError('wake plan cache exceeds its size limit')
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+    except RecursionError as exc:
+        raise ValueError('wake plan cache is nested too deeply') from exc
+    return validate_wake_plan(value)
+
+
+def wake_plan_summary(cfg, plan, source, state, cached=False):
+    policy = plan or cfg
+    summary = {'source': source, 'version': plan['version'] if plan else None,
+               'timezone': policy['timezone'], 'schedule': policy['schedule'],
+               'generated_at': plan['generated_at'] if plan else None,
+               'valid_until': plan['occurrences'][-1] if plan else None,
+               'occurrence_count': len(plan['occurrences']) if plan else 0,
+               'future_occurrences': [], 'cached': cached}
+    if state.get('time_trusted'):
+        current = datetime.now(timezone.utc)
+        cursor = datetime.fromtimestamp(current.timestamp() + cfg['runtime']['shutdown_margin_seconds'],
+                                        ZoneInfo(policy['timezone']))
+        for _ in range(5):
+            cursor = compute_next_run(cursor, policy['schedule'])
+            summary['future_occurrences'].append(cursor.astimezone(timezone.utc).isoformat(timespec='seconds'))
+        summary['continued_from_policy'] = bool(plan and any(
+            item not in plan['occurrences'] for item in summary['future_occurrences']))
+    return summary
+
+
 def notify_failure(cfg, state, budget):
     policy = cfg['notification']
     result = {'status': 'not_configured', 'attempts': 0}
@@ -453,14 +496,20 @@ def notify_failure(cfg, state, budget):
         result['attempts'] += 1
         try:
             data = json.dumps(state, allow_nan=False).encode()
-            code = run_command(policy['command'], min(policy['timeout_sec'], end.remaining()), input_data=data).returncode
+            # Divide a short total window across the attempts it can still fit;
+            # each process needs time for both execution and group cleanup.
+            available_attempts = min(policy['max_attempts'] - attempt, max(1, int(end.remaining() // 2)))
+            seconds = min(policy['timeout_sec'], end.remaining() / available_attempts)
+            code = run_command(policy['command'], seconds, input_data=data).returncode
         except (OSError, ValueError, subprocess.SubprocessError):
             code = 125
         result.update(status='accepted' if code == 0 else 'failed', returncode=code)
         if code == 0:
             break
         if attempt + 1 < policy['max_attempts'] and end.remaining() > 1:
-            end.sleep(min(policy['backoff_sec'] * (2 ** attempt), 5))
+            remaining_attempts = min(policy['max_attempts'] - attempt - 1, int(end.remaining() // 2))
+            spare = max(0, end.remaining() - 2 * remaining_attempts)
+            end.sleep(min(policy['backoff_sec'] * (2 ** attempt), 5, spare))
     return result
 
 
@@ -497,6 +546,7 @@ def run_cycle(cfg, initial_error=None):
              'notification': {'status': 'pending', 'attempts': 0}, 'shutdown': {'status': 'pending'},
              'last_trusted_time': previous.get('last_trusted_time'), 'remote_debug': False,
              'server': {'status': 'pending'}, 'display': {'status': 'skipped'}}
+    plan, plan_source, plan_cached = None, 'local', False
     log(f"Cycle started event={state['event_id']} budget={cfg['runtime']['max_seconds']}s", cfg['log_file'])
     def failure(stage, exc):
         state['failures'].append({'stage': stage, 'message': str(exc)[:500]})
@@ -513,6 +563,7 @@ def run_cycle(cfg, initial_error=None):
         if state['time_trusted']:
             # Early boot wall time may be stale until NTP/RTC corrects it.
             state['started_at'] = (finished - timedelta(seconds=elapsed)).isoformat()
+        state['wake_plan'] = wake_plan_summary(cfg, plan, plan_source, state, plan_cached)
     def save():
         refresh_summary()
         try:
@@ -537,29 +588,46 @@ def run_cycle(cfg, initial_error=None):
     except Exception as exc:
         failure('outbox', exc)
     try:
+        plan = load_wake_plan(cfg['wake_plan_file'])
+        if plan:
+            plan_source, plan_cached = 'cache', True
+    except (OSError, ValueError, TypeError, OverflowError) as exc:
+        failure('wake_plan_cache', exc)
+    try:
         if initial_error:
             raise ValueError(initial_error)
-        ready = False
+        ready, prepared = False, False
+        # Initial boot probing must leave time for check-in and a second RTC
+        # recovery phase, even if the first readiness window is exhausted.
+        startup = Budget(deadline=work.deadline - ALARM_RESERVE_SECONDS - cfg['server']['total_timeout_sec'])
+        client.budget = startup
         try:
-            wait_for_pisugar(client)
-            ready = True
-        except Exception as exc:
-            failure('pisugar', exc)
-        if ready:
             try:
-                value = float(client.get('battery'))
-                if not math.isfinite(value) or not 0 <= value <= 100:
-                    raise ValueError('invalid battery percentage')
-                state['battery_percent'] = value
-                state['low_battery'] = value <= cfg['runtime']['low_battery_percent']
-                if state['low_battery']:
-                    failure('battery', 'low battery; skipping task and notification retries')
+                wait_for_pisugar(client)
+                ready = True
             except Exception as exc:
-                failure('battery', exc)
-            try:
-                prepare_time(cfg, client, state, previous, work)
-            except Exception as exc:
-                failure('time', exc)
+                failure('pisugar', exc)
+            if ready:
+                try:
+                    def battery(value):
+                        number = float(value)
+                        if not math.isfinite(number) or not 0 <= number <= 100:
+                            raise ValueError('invalid battery percentage')
+                        return number
+                    value = float(client.get('battery', validator=battery))
+                    state['battery_percent'] = value
+                    state['low_battery'] = value <= cfg['runtime']['low_battery_percent']
+                    if state['low_battery']:
+                        failure('battery', 'low battery; skipping task and notification retries')
+                except Exception as exc:
+                    failure('battery', exc)
+                try:
+                    prepare_time(cfg, client, state, previous, startup)
+                    prepared = True
+                except Exception as exc:
+                    failure('time', exc)
+        finally:
+            client.budget = work
         if not state.get('low_battery'):
             page = None
             try:
@@ -569,12 +637,26 @@ def run_cycle(cfg, initial_error=None):
                     'started_at': state['started_at'], 'time_trusted': state['time_trusted'],
                     'battery_percent': state.get('battery_percent'),
                     'local_debug': any(os.path.exists(path) for path in DEBUG_PATHS),
+                    'wake_schedule': {'timezone': cfg['timezone'], 'schedule': cfg['schedule']},
                     'previous': {key: previous.get(key) for key in
                                  ('event_id', 'finished_at', 'shutdown', 'failures')},
                 })
                 # Adopt this only after authenticated, well-formed check-in; never load from disk.
                 state['remote_debug'] = reply['debug']
                 state['server'] = {'status': 'connected', 'latency_ms': server.last_latency_ms}
+                # Wake policy and display have independent validation. Neither
+                # can invalidate the current authenticated maintenance flag.
+                if 'wake_plan' in reply:
+                    try:
+                        downloaded = validate_wake_plan(reply['wake_plan'])
+                        plan, plan_source, plan_cached = downloaded, 'server', False
+                        try:
+                            atomic_json(cfg['wake_plan_file'], downloaded)
+                            plan_cached = True
+                        except (OSError, ValueError) as exc:
+                            failure('wake_plan_cache', exc)
+                    except (ValueError, TypeError, OverflowError) as exc:
+                        failure('wake_plan', exc)
                 version = reply.get('content_version')
                 if type(version) is not int or version < 1:
                     raise ValueError('invalid content version')
@@ -586,9 +668,11 @@ def run_cycle(cfg, initial_error=None):
                     state['server']['status'] = 'failed'
             if page is not None:
                 try:
+                    task_seconds = min(cfg['task']['timeout_sec'], max(0, work.remaining() - ALARM_RESERVE_SECONDS))
                     env = dict(os.environ, PISCHED_CONFIG=json.dumps(cfg), PISCHED_EVENT_ID=state['event_id'],
-                               PISCHED_PAGE=json.dumps(page), PISCHED_HTTP_LATENCY_MS=str(server.last_latency_ms))
-                    rc = run_task(cfg['task']['command'], min(cfg['task']['timeout_sec'], max(0, work.remaining() - ALARM_RESERVE_SECONDS)), cfg['log_file'], env)
+                               PISCHED_PAGE=json.dumps(page), PISCHED_HTTP_LATENCY_MS=str(server.last_latency_ms),
+                               PISCHED_TASK_BUDGET_SEC=str(task_seconds))
+                    rc = run_task(cfg['task']['command'], task_seconds, cfg['log_file'], env)
                     log(f'Task rc={rc}', cfg['log_file'])
                     if rc:
                         failure('task', f'exit status {rc}')
@@ -599,7 +683,8 @@ def run_cycle(cfg, initial_error=None):
                 except Exception as exc:
                     failure('task', exc)
         try:
-            program_alarm(cfg, client, state)
+            alarm_cfg = dict(cfg, timezone=plan['timezone'], schedule=plan['schedule']) if plan else cfg
+            recover_alarm(alarm_cfg, client, state, previous, work, prepared)
             log(f"Alarm confirmed: {state['next_run']}", cfg['log_file'])
         except Exception as exc:
             failure('alarm', exc)
