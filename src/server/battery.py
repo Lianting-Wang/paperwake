@@ -17,10 +17,45 @@ MIN_SAMPLES = 3
 MIN_SPAN_HOURS = 6
 MIN_DROP_PP = 2
 CHARGE_RISE_PP = 2
+CHARGE_RISE_V = .05
 SMOOTH_SAMPLES = 5
 SMOOTH_HOURS = 3
 MAX_GAP_HOURS = 24
 MAX_AGE_HOURS = 24
+
+
+class _RiseEvidence:
+    """Track separated central bands instead of treating gauge noise as charge."""
+    def __init__(self, threshold):
+        self.threshold = threshold
+        self.reset()
+
+    def reset(self):
+        self.recent = deque(maxlen=SMOOTH_SAMPLES)
+        self.minimum = self.reference_upper = None
+        self.reference_width = 0
+        self.count = 0
+
+    def observe(self, at, value):
+        if self.recent and at - self.recent[-1][0] > MAX_GAP_HOURS * 3600:
+            self.reset()
+        self.recent.append((at, value))
+        self.count += 1
+        while at - self.recent[0][0] > SMOOTH_HOURS * 3600:
+            self.recent.popleft()
+        values = sorted(value for _, value in self.recent)
+        level = median(values)
+        lower, upper = values[len(values) // 4], values[3 * len(values) // 4]
+        rise = self.reference_upper is not None and lower - self.reference_upper >= self.threshold
+        if self.minimum is None or level < self.minimum:
+            self.minimum, self.reference_upper = level, upper
+            self.reference_width = upper - lower
+        pending = (value - upper >= self.threshold + upper - lower
+                   and value - self.reference_upper >= self.threshold)
+        # A large level shift must stay paused while enough readings arrive to
+        # separate the bands, even after the new readings enter the upper band.
+        pending |= value - self.reference_upper >= 2 * self.threshold + self.reference_width
+        return rise, pending
 
 
 def _battery_point(rows, now, cutoff):
@@ -52,12 +87,17 @@ def estimate_battery(db, device_id, now):
     """Return a bounded-memory estimate, or an explicit reason to withhold it.
 
     ``ready`` requires at least three distinct sample times, six elapsed hours
-    and a net decrease of two percentage points. Charge detection uses the median
-    of up to five readings from the last three hours; a two-point rise from its
-    running minimum starts a new possible-charge segment. A sharp raw rise pauses
-    forecasts until confirmed or reversed, without discarding discharge history.
-    A gap of more than 24 hours also resets the segment. Fluctuations are not
-    summed: the rate uses the raw segment endpoints and actual elapsed seconds.
+    and a net decrease of two percentage points. With three valid voltage samples,
+    rise detection prefers voltage (50 mV); otherwise it uses percentage (2 pp).
+    These are conservative trend thresholds, not measured charging status.
+    Detection compares the
+    middle 50% of up to five readings from the last three hours with the band at
+    the lowest rolling median. A new band's lower edge must exceed the reference
+    upper edge by the threshold before restarting the discharge segment. Overlapping
+    noisy bands do not establish charging, even when their medians rise.
+    A raw rise beyond the current band and its width pauses forecasts without
+    discarding history. Gaps over 24 hours also reset the segment. Fluctuations
+    are not summed: the rate uses raw endpoints and actual elapsed seconds.
 
     ``remaining_days`` counts from ``now`` to the estimated 10% reserve crossing,
     allowing for time since the latest reading. Non-ready results expose evidence
@@ -84,9 +124,11 @@ def _estimate(db, device_id, now):
               'remaining_days': None, 'estimated_until': None,
               'reserve_percent': RESERVE_PERCENT, 'window_days': WINDOW_DAYS,
               'sample_count': 0, 'span_hours': 0, 'observed_drop_pp': None,
-              'latest_percent': None, 'latest_at': None}
+              'latest_percent': None, 'latest_at': None,
+              'voltage_sample_count': 0, 'first_voltage': None, 'latest_voltage': None}
     table = '_battery_points_' + uuid.uuid4().hex
-    db.execute(f'CREATE TEMP TABLE {table} (at REAL NOT NULL, percent REAL NOT NULL, received_at REAL NOT NULL)')
+    db.execute(f'CREATE TEMP TABLE {table} (at REAL NOT NULL, percent REAL NOT NULL, '
+               'received_at REAL NOT NULL, voltage REAL)')
     cutoff = now - timedelta(days=WINDOW_DAYS)
     unknown_clock_received = None
     for point, _ in _cycles(db, device_id, now, cutoff, point_builder=_battery_point):
@@ -95,44 +137,54 @@ def _estimate(db, device_id, now):
             unknown_clock_received = (received if unknown_clock_received is None
                                       else max(unknown_clock_received, received))
             continue
-        db.execute(f'INSERT INTO {table} VALUES (?, ?, ?)',
-                   (point['at'].timestamp(), point['battery_percent'], received))
+        voltage = point['battery_voltage']
+        db.execute(f'INSERT INTO {table} VALUES (?, ?, ?, ?)',
+                   (point['at'].timestamp(), point['battery_percent'], received,
+                    voltage if voltage is not None and voltage > 0 else None))
 
-    first = last = minimum = None
+    first = last = None
     reset_reason = None
-    recent = deque(maxlen=SMOOTH_SAMPLES)
+    percent_trend = _RiseEvidence(CHARGE_RISE_PP)
+    voltage_trend = _RiseEvidence(CHARGE_RISE_V)
     pending_rise = False
     # Distinct cycles with the same timestamp cannot provide additional elapsed
     # evidence. Averaging those readings is deterministic under out-of-order
     # backfills and retains one observation for that instant.
-    cursor = db.execute(f'SELECT at, AVG(percent) AS percent, MAX(received_at) FROM {table} GROUP BY at ORDER BY at')
+    cursor = db.execute(f'SELECT at, AVG(percent), MAX(received_at), AVG(voltage) '
+                        f'FROM {table} GROUP BY at ORDER BY at')
     latest_received = None
     try:
         for row in cursor:
             sample = (row[0], row[1])
+            voltage = row[3]
             if last is not None and sample[0] - last[0] > MAX_GAP_HOURS * 3600:
                 first = None
                 reset_reason = 'gap'
-                recent.clear()
-            recent.append(sample)
-            while sample[0] - recent[0][0] > SMOOTH_HOURS * 3600:
-                recent.popleft()
-            level = median(value for _, value in recent)
-            if first is not None and level - minimum >= CHARGE_RISE_PP:
+                percent_trend.reset()
+                voltage_trend.reset()
+            rise, pending_rise = percent_trend.observe(*sample)
+            if voltage is not None:
+                voltage_rise, voltage_pending = voltage_trend.observe(sample[0], voltage)
+                if voltage_trend.count >= MIN_SAMPLES:
+                    rise, pending_rise = voltage_rise, voltage_pending
+            if first is not None and rise:
                 first = None
                 reset_reason = 'charging'
-                recent.clear()
-                recent.append(sample)
-                level = sample[1]
+                percent_trend.reset()
+                percent_trend.observe(*sample)
+                voltage_trend.reset()
+                if voltage is not None:
+                    voltage_trend.observe(sample[0], voltage)
+                pending_rise = False
             if first is None:
                 first = sample
-                minimum = level
                 result['sample_count'] = 0
-            minimum = min(minimum, level)
-            # An isolated high reading may be a real charge beginning now. Do
-            # not extrapolate it, but do not permanently reset on gauge noise.
-            pending_rise = (sample[1] - level >= CHARGE_RISE_PP
-                            and sample[1] - minimum >= CHARGE_RISE_PP)
+                result.update(voltage_sample_count=0, first_voltage=None, latest_voltage=None)
+            if voltage is not None:
+                if result['first_voltage'] is None:
+                    result['first_voltage'] = round(voltage, 4)
+                result['latest_voltage'] = round(voltage, 4)
+                result['voltage_sample_count'] += 1
             last = sample
             latest_received = row[2]
             result['sample_count'] += 1
@@ -160,7 +212,7 @@ def _estimate(db, device_id, now):
         result['status'] = reset_reason or 'insufficient'
     elif observed_drop < MIN_DROP_PP:
         result['status'] = reset_reason or (
-            'flat' if minimum >= first[1] - MIN_DROP_PP else 'insufficient')
+            'flat' if percent_trend.minimum >= first[1] - MIN_DROP_PP else 'insufficient')
     else:
         daily = observed_drop * 86400 / span_seconds
         until = datetime.fromtimestamp(last[0], timezone.utc) + timedelta(

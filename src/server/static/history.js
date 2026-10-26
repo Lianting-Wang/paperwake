@@ -99,6 +99,9 @@
       {window: value.window_days || 7, count: fmt(value.sample_count, 0), hours: fmt(value.span_hours)}) : labels.estimateWindow;
     if (valid(value.observed_drop_pp) && value.observed_drop_pp > 0) basis += ' ' + interpolate(labels.estimateDrop, {drop: fmt(value.observed_drop_pp)});
     text('basis', basis);
+    text('voltage', value.voltage_sample_count >= 2 && valid(value.first_voltage) && valid(value.latest_voltage)
+      ? interpolate(labels.estimateVoltageBasis, {first: fmt(value.first_voltage, 3),
+        last: fmt(value.latest_voltage, 3), count: fmt(value.voltage_sample_count, 0)}) : '');
   }
   function grid(low, high, start, end) {
     const mobile = compact();

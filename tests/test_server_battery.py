@@ -21,9 +21,10 @@ class BatteryEstimateTests(unittest.TestCase):
         self.db.execute('CREATE INDEX events_device_received ON events(device_id,received_at)')
         self.now = datetime(2026, 10, 22, 12, tzinfo=timezone.utc)
 
-    def add(self, event, at, percent, phase='final', received=None, device='screen', **changes):
+    def add(self, event, at, percent, phase='final', received=None, device='screen', voltage=None, **changes):
         payload = {'time_trusted': True, 'started_at': at.isoformat(),
-                   'metrics': {'timestamp': at.isoformat(), 'values': {'battery_percent': percent}}}
+                   'metrics': {'timestamp': at.isoformat(),
+                               'values': {'battery_percent': percent, 'battery_voltage': voltage}}}
         payload.update(changes)
         self.db.execute('INSERT INTO events VALUES (?, ?, ?, ?, ?)',
                         (device, event, phase, (received or self.now).isoformat(), json.dumps(payload)))
@@ -44,6 +45,7 @@ class BatteryEstimateTests(unittest.TestCase):
             'reserve_percent': 10, 'window_days': 7, 'sample_count': 3,
             'span_hours': 24, 'observed_drop_pp': 6, 'latest_percent': 76,
             'latest_at': (self.now - timedelta(hours=2)).isoformat(),
+            'voltage_sample_count': 0, 'first_voltage': None, 'latest_voltage': None,
         })
         json.dumps(result, allow_nan=False)
 
@@ -84,6 +86,31 @@ class BatteryEstimateTests(unittest.TestCase):
         self.assertEqual(result['daily_consumption_pp'], 9.6)
         self.assertEqual(result['latest_percent'], 85.2)
 
+    def test_hours_of_overlapping_gauge_fluctuations_do_not_restart_discharge(self):
+        start = self.now - timedelta(hours=62)
+        for index in range(97):
+            self.add(f'decline-{index}', start + timedelta(minutes=30 * index),
+                     100 - 25 * index / 96)
+        # Reproduces the later battery-only readings that defeated median-only
+        # charge detection. Check every arrival, including repeated high clusters.
+        fluctuations = [
+            74.18793, 76.352005, 75.49587, 75.85196, 74.41993, 74.26014,
+            74.93199, 75.46406, 74.58801, 76.81189, 75.44792, 73.59612,
+            73.779884, 74.96398, 72.77998, 74.08393, 75.75989, 76.74794,
+            76.22818, 73.823944, 73.78796, 72.79996, 73.947975, 73.82003,
+            73.33608, 75.90812, 76.59997, 75.48392, 73.17607, 76.52396,
+        ]
+        for index, percent in enumerate(fluctuations):
+            self.now = start + timedelta(hours=48.5 + index / 2)
+            self.add(f'fluctuation-{index}', self.now, percent)
+            with self.subTest(index=index, percent=percent):
+                result = self.data()
+                self.assertEqual(result['status'], 'ready')
+                self.assertEqual(result['sample_count'], 98 + index)
+                self.assertGreater(result['remaining_days'], 0)
+                self.assertAlmostEqual(result['daily_consumption_pp'],
+                                       (100 - percent) * 24 / (48.5 + index / 2), places=3)
+
     def test_a_new_sharp_rise_pauses_forecasts_without_discarding_history(self):
         self.noisy_discharge()
         self.now += timedelta(minutes=30)
@@ -102,11 +129,11 @@ class BatteryEstimateTests(unittest.TestCase):
 
     def test_sustained_dense_charge_requires_a_new_discharge_segment(self):
         self.noisy_discharge()
-        for index, percent in enumerate([95, 95, 95]):
+        for index, percent in enumerate([95, 95, 95, 95]):
             self.now += timedelta(minutes=30)
             self.add(f'charge-{index}', self.now, percent)
             result = self.data()
-            self.assertEqual(result['status'], 'charging')
+            self.assertNotEqual(result['status'], 'ready')
             self.assertIsNone(result['remaining_days'])
         self.assertEqual(result['sample_count'], 1)
         for index in range(1, 14):
@@ -128,6 +155,45 @@ class BatteryEstimateTests(unittest.TestCase):
                 self.assertIsNone(result['daily_consumption_pp'])
                 self.assertIsNone(result['remaining_days'])
                 self.assertIsNone(result['estimated_until'])
+
+    def test_voltage_trend_keeps_percentage_recalibration_from_resetting_history(self):
+        for index in range(13):
+            self.add(f'voltage-{index}', self.now - timedelta(hours=6 - index / 2),
+                     90 - 10 * index / 12, voltage=4.05 - .15 * index / 12)
+        for index, percent in enumerate([81, 82, 83, 84]):
+            self.now += timedelta(minutes=30)
+            self.add(f'recalibrated-{index}', self.now, percent, voltage=3.90 - .001 * index)
+            result = self.data()
+            self.assertEqual(result['status'], 'ready')
+            self.assertEqual(result['sample_count'], 14 + index)
+        self.assertEqual(result['voltage_sample_count'], 17)
+        self.assertEqual(result['first_voltage'], 4.05)
+        self.assertEqual(result['latest_voltage'], 3.897)
+
+    def test_sustained_voltage_rise_is_detected_even_if_percentage_is_unchanged(self):
+        for index in range(13):
+            self.add(f'voltage-{index}', self.now - timedelta(hours=6 - index / 2),
+                     90 - 10 * index / 12, voltage=4.05 - .15 * index / 12)
+        for index in range(4):
+            self.now += timedelta(minutes=30)
+            self.add(f'rising-voltage-{index}', self.now, 80, voltage=4.08)
+            self.assertIsNone(self.data()['remaining_days'])
+        result = self.data()
+        self.assertEqual(result['status'], 'charging')
+        self.assertEqual(result['sample_count'], 1)
+        self.assertEqual(result['voltage_sample_count'], 1)
+        self.assertEqual(result['first_voltage'], 4.08)
+
+    def test_missing_voltage_does_not_discard_valid_percentage_samples(self):
+        for index, voltage in enumerate([4.1, None, 3.9]):
+            self.add(f'missing-voltage-{index}', self.now - timedelta(hours=24 - index * 12),
+                     90 - 5 * index, voltage=voltage)
+        result = self.data()
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['sample_count'], 3)
+        self.assertEqual(result['voltage_sample_count'], 2)
+        self.assertEqual(result['first_voltage'], 4.1)
+        self.assertEqual(result['latest_voltage'], 3.9)
 
     def test_recent_charge_resets_old_discharge_and_then_requires_new_evidence(self):
         self.series([48, 36, 24, 12, 6, 0], [90, 80, 70, 90, 89, 88])

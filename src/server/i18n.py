@@ -191,6 +191,8 @@ ENGLISH = {
     '近 {window} 天内 {count} 个样本，覆盖 {hours} 小时。':
         '{count} samples over {hours} hours, from the last {window} days.',
     '期间电量下降 {drop} 个百分点。': 'Battery dropped {drop} percentage points over this period.',
+    '电压依据：{first} → {last} V，{count} 个有效样本。':
+        'Voltage evidence: {first} → {last} V, {count} valid samples.',
     '独立采用最近 7 天的有效电量样本，不随图表范围改变。':
         'Uses valid battery samples from the last 7 days, independently of the chart range.',
     '这是基于历史电量变化的推算，充电、电量校准和使用频率变化都会影响结果。':

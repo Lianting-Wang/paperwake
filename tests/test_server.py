@@ -622,17 +622,23 @@ class ServerTests(unittest.TestCase):
             event = 'battery-'+str(index)
             self.check_in(event, time_trusted=True)
             self.report(event, time_trusted=True, started_at=self.now.isoformat(),
-                        metrics={'timestamp': self.now.isoformat(), 'values': {'battery_percent': percent}})
+                        metrics={'timestamp': self.now.isoformat(),
+                                 'values': {'battery_percent': percent, 'battery_voltage': 4.1 - index * .05}})
         self.login()
         estimate = self.client.get('/devices/test-screen/history/data?days=all').json['estimate']
         self.assertEqual(estimate['status'], 'ready')
         self.assertEqual(estimate['daily_consumption_pp'], 12)
         self.assertEqual(estimate['reserve_percent'], 10)
         self.assertAlmostEqual(estimate['remaining_days'], 74 / 12, places=3)
+        self.assertEqual(estimate['voltage_sample_count'], 3)
+        self.assertEqual(estimate['first_voltage'], 4.1)
+        self.assertEqual(estimate['latest_voltage'], 4.0)
         dashboard = self.client.get('/')
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn('估计日耗电'.encode(), dashboard.data)
         self.assertIn('预计剩余续航'.encode(), dashboard.data)
+        self.assertIn('电压依据：4.100 → 4.000 V，3 个有效样本。'.encode(), dashboard.data)
+        self.assertIn(b'estimateVoltageBasis', self.client.get('/devices/test-screen/history').data)
 
     def test_cycle_details_and_charts_share_failure_definition(self):
         self.check_in()
