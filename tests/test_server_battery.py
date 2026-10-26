@@ -68,6 +68,56 @@ class BatteryEstimateTests(unittest.TestCase):
         self.assertEqual(result['observed_drop_pp'], 2)
         self.assertEqual(result['sample_count'], 7)
 
+    def noisy_discharge(self):
+        # Half-hour reports decline overall, with isolated low readings followed
+        # by rebounds larger than 2 pp. Those rebounds are not charging evidence.
+        for index in range(25):
+            percent = 90 - .2 * index - (3 if index % 5 == 3 else 0)
+            self.add(f'noisy-{index}', self.now - timedelta(hours=12 - index / 2), percent)
+
+    def test_repeated_gauge_rebounds_keep_the_observed_discharge_history(self):
+        self.noisy_discharge()
+        result = self.data()
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['sample_count'], 25)
+        self.assertEqual(result['span_hours'], 12)
+        self.assertEqual(result['daily_consumption_pp'], 9.6)
+        self.assertEqual(result['latest_percent'], 85.2)
+
+    def test_a_new_sharp_rise_pauses_forecasts_without_discarding_history(self):
+        self.noisy_discharge()
+        self.now += timedelta(minutes=30)
+        self.add('spike', self.now, 90)
+        result = self.data()
+        self.assertEqual(result['status'], 'charging')
+        self.assertIsNone(result['daily_consumption_pp'])
+        self.assertIsNone(result['remaining_days'])
+        self.assertEqual(result['sample_count'], 26)
+        self.now += timedelta(minutes=30)
+        self.add('normal-again', self.now, 84.8)
+        result = self.data()
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['sample_count'], 27)
+        self.assertEqual(result['span_hours'], 13)
+
+    def test_sustained_dense_charge_requires_a_new_discharge_segment(self):
+        self.noisy_discharge()
+        for index, percent in enumerate([95, 95, 95]):
+            self.now += timedelta(minutes=30)
+            self.add(f'charge-{index}', self.now, percent)
+            result = self.data()
+            self.assertEqual(result['status'], 'charging')
+            self.assertIsNone(result['remaining_days'])
+        self.assertEqual(result['sample_count'], 1)
+        for index in range(1, 14):
+            self.now += timedelta(minutes=30)
+            self.add(f'after-charge-{index}', self.now, 95 - .3 * index)
+        result = self.data()
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['sample_count'], 14)
+        self.assertEqual(result['span_hours'], 6.5)
+        self.assertEqual(result['daily_consumption_pp'], 14.4)
+
     def test_flat_data_does_not_claim_zero_consumption_or_unlimited_life(self):
         for percentages in ([100, 100, 100], [90, 89, 90], [90, 89.5, 89.1]):
             with self.subTest(percentages=percentages):

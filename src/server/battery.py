@@ -3,7 +3,9 @@
 Only the most recent continuous discharge segment in a seven-day window is used.
 This estimates percentage points per elapsed day, never electrical energy.
 """
+from collections import deque
 from datetime import datetime, timedelta, timezone
+from statistics import median
 import uuid
 
 from .history import _cycle_point, _cycles, _mapping, _timestamp, merge_cycle
@@ -15,6 +17,8 @@ MIN_SAMPLES = 3
 MIN_SPAN_HOURS = 6
 MIN_DROP_PP = 2
 CHARGE_RISE_PP = 2
+SMOOTH_SAMPLES = 5
+SMOOTH_HOURS = 3
 MAX_GAP_HOURS = 24
 MAX_AGE_HOURS = 24
 
@@ -48,11 +52,12 @@ def estimate_battery(db, device_id, now):
     """Return a bounded-memory estimate, or an explicit reason to withhold it.
 
     ``ready`` requires at least three distinct sample times, six elapsed hours
-    and a net decrease of two percentage points. An upward move of at least two
-    points from the running minimum starts a new possible-charge segment, and a
-    gap of more than 24 hours also resets the segment. Smaller fluctuations are
-    not summed: the rate uses the segment's net decrease over its actual elapsed
-    seconds, avoiding inflated consumption from gauge jitter.
+    and a net decrease of two percentage points. Charge detection uses the median
+    of up to five readings from the last three hours; a two-point rise from its
+    running minimum starts a new possible-charge segment. A sharp raw rise pauses
+    forecasts until confirmed or reversed, without discarding discharge history.
+    A gap of more than 24 hours also resets the segment. Fluctuations are not
+    summed: the rate uses the raw segment endpoints and actual elapsed seconds.
 
     ``remaining_days`` counts from ``now`` to the estimated 10% reserve crossing,
     allowing for time since the latest reading. Non-ready results expose evidence
@@ -95,6 +100,8 @@ def _estimate(db, device_id, now):
 
     first = last = minimum = None
     reset_reason = None
+    recent = deque(maxlen=SMOOTH_SAMPLES)
+    pending_rise = False
     # Distinct cycles with the same timestamp cannot provide additional elapsed
     # evidence. Averaging those readings is deterministic under out-of-order
     # backfills and retains one observation for that instant.
@@ -106,14 +113,26 @@ def _estimate(db, device_id, now):
             if last is not None and sample[0] - last[0] > MAX_GAP_HOURS * 3600:
                 first = None
                 reset_reason = 'gap'
-            elif minimum is not None and sample[1] - minimum >= CHARGE_RISE_PP:
+                recent.clear()
+            recent.append(sample)
+            while sample[0] - recent[0][0] > SMOOTH_HOURS * 3600:
+                recent.popleft()
+            level = median(value for _, value in recent)
+            if first is not None and level - minimum >= CHARGE_RISE_PP:
                 first = None
                 reset_reason = 'charging'
+                recent.clear()
+                recent.append(sample)
+                level = sample[1]
             if first is None:
                 first = sample
-                minimum = sample[1]
+                minimum = level
                 result['sample_count'] = 0
-            minimum = min(minimum, sample[1])
+            minimum = min(minimum, level)
+            # An isolated high reading may be a real charge beginning now. Do
+            # not extrapolate it, but do not permanently reset on gauge noise.
+            pending_rise = (sample[1] - level >= CHARGE_RISE_PP
+                            and sample[1] - minimum >= CHARGE_RISE_PP)
             last = sample
             latest_received = row[2]
             result['sample_count'] += 1
@@ -135,6 +154,8 @@ def _estimate(db, device_id, now):
         result['status'] = 'insufficient'
     elif now.timestamp() - last[0] > MAX_AGE_HOURS * 3600:
         result['status'] = 'stale'
+    elif pending_rise:
+        result['status'] = 'charging'
     elif result['sample_count'] < MIN_SAMPLES or span_seconds < MIN_SPAN_HOURS * 3600:
         result['status'] = reset_reason or 'insufficient'
     elif observed_drop < MIN_DROP_PP:
