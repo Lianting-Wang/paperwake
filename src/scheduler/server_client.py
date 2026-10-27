@@ -19,6 +19,9 @@ import tempfile
 import time
 from urllib.parse import urlsplit
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from display_model import validate_display
+
 
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_PAYLOAD_BYTES = 256 * 1024
@@ -75,29 +78,6 @@ def validate_server_config(raw):
     return cfg
 
 
-def validate_display(value):
-    """Validate the fixed ASCII page independently from the remote debug flag."""
-    if not isinstance(value, dict):
-        raise ValueError('display must be an object')
-
-    def text(field, limit, *, empty=False):
-        if (not isinstance(field, str) or len(field) > limit or
-                (not empty and not field) or
-                any(not 32 <= ord(char) <= 126 for char in field)):
-            raise ValueError('display contains invalid ASCII text or length')
-        return field
-
-    rows = value.get('rows')
-    if not isinstance(rows, list) or len(rows) > 6:
-        raise ValueError('display.rows must contain at most six rows')
-    cleaned_rows = []
-    for row in rows:
-        if not isinstance(row, dict):
-            raise ValueError('display row must be an object')
-        cleaned_rows.append({'label': text(row.get('label'), 20),
-                             'value': text(row.get('value'), 48, empty=True)})
-    return {'title': text(value.get('title'), 40),
-            'status': text(value.get('status'), 24), 'rows': cleaned_rows}
 
 
 class _DeadlineBudget:

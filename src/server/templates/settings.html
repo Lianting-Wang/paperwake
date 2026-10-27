@@ -11,7 +11,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <section class="panel management-card editor-section">
         <div class="card-heading"><div><p class="eyebrow">{{ t('基本信息') }}</p><h2>{{ t('屏幕显示内容') }}</h2></div><span class="section-number" aria-hidden="true">01</span></div>
-        <p class="field-note">{{ t('电子纸目前仅支持英文、数字和可打印 ASCII 符号；未使用的信息行请留空。') }}</p>
+        <p class="field-note">{{ t('支持中文、英文和数字；未使用的信息行请留空。文字放不下时，可在版式页调整。') }}</p>
         <div class="editor-fields">
           <label for="display-title">{{ t('标题') }} <span class="field-limit" aria-label="{{ t('最多 {count} 个字符', count=40) }}">40</span><input id="display-title" name="title" value="{{ display.title }}" maxlength="40" required></label>
           <label for="display-status">{{ t('状态') }} <span class="field-limit" aria-label="{{ t('最多 {count} 个字符', count=24) }}">24</span><input id="display-status" name="status" value="{{ display.status }}" maxlength="24" required></label>
@@ -24,7 +24,7 @@
         <div class="editor-row">
           <span class="row-number" aria-hidden="true">{{ '%02d'|format(i+1) }}</span>
           <div><label class="sr-only" for="label_{{ i }}">{{ t('第 {number} 行名称', number=i+1) }}</label><input id="label_{{ i }}" name="label_{{ i }}" value="{{ row.get('label', '') }}" maxlength="20" placeholder="{{ t('名称') }}"></div>
-          <div><label class="sr-only" for="value_{{ i }}">{{ t('第 {number} 行内容', number=i+1) }}</label><input id="value_{{ i }}" name="value_{{ i }}" value="{{ row.get('value', '') }}" maxlength="48" placeholder="{{ t('要展示的信息（英文或数字）') }}"></div>
+          <div><label class="sr-only" for="value_{{ i }}">{{ t('第 {number} 行内容', number=i+1) }}</label><textarea id="value_{{ i }}" name="value_{{ i }}" maxlength="48" rows="2" placeholder="{{ t('要展示的信息') }}">{{ row.get('value', '') }}</textarea></div>
         </div>
         {% endfor %}
         <p class="field-note row-note">{{ t('最多六行，空白行不会显示在屏幕上。') }}</p>
@@ -37,7 +37,7 @@
       <div class="editor-save-bar"><p>{{ t('修改将在设备下次报到时生效。') }}</p><div class="actions"><a href="{{ url_for('dashboard') }}">{{ t('取消') }}</a><button type="submit" class="primary">{{ t('保存设置') }} <span aria-hidden="true">↗</span></button></div></div>
     </form>
     <aside class="editor-preview">
-      <section class="panel management-card preview-card"><div class="card-heading"><div><p class="eyebrow">{{ t('实时预览') }}</p><h2>{{ t('屏幕上的样子') }}</h2></div><span class="card-symbol">{{ icon('screen') }}</span></div><div class="screen-stage">{{ screen_preview(device.device_id) }}</div><p class="card-footnote">{{ t('预览随输入更新；保存后将在设备下次报到时生效。') }}</p><p class="card-footnote preview-context-note">{{ t('TIME 与 BATTERY 使用最近一次设备报告；这不是屏幕实时截图。') }}</p></section>
+      <section class="panel management-card preview-card"><div class="card-heading"><div><p class="eyebrow">{{ t('实时预览') }}</p><h2>{{ t('屏幕上的样子') }}</h2></div><span class="card-symbol">{{ icon('screen') }}</span></div><div class="screen-stage">{{ screen_preview(device.device_id) }}</div><p class="card-footnote">{{ t('预览随输入更新；保存后将在设备下次报到时生效。') }}</p><p class="card-footnote preview-context-note">{{ t('更新时间与电量使用最近一次设备报告；这不是屏幕实时截图。') }}</p><a href="{{ url_for('layout_editor', device_id=device.device_id) }}">{{ t('调整版式') }} ↗</a></section>
       <div class="quiet-note"><span>{{ icon('check') }}</span><p>{{ t('内容与唤醒计划独立保存，可放心调整。') }}</p></div>
     </aside>
   </div>

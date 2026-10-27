@@ -29,7 +29,7 @@ paths = [
 ]
 # New deployments have a shared planner and an optional downloaded plan cache.
 # Their absence on an older device is a valid pre-upgrade snapshot.
-paths.extend(name for name in ('/opt/pisched/wake_plan.py', '/var/lib/pisched/wake-plan.json')
+paths.extend(name for name in ('/opt/pisched/wake_plan.py', '/opt/pisched/display_model.py', '/var/lib/pisched/wake-plan.json')
              if Path(name).is_file())
 display = Path('/home/wlt/IT8951')
 if display.is_dir():
@@ -37,6 +37,10 @@ if display.is_dir():
         paths.extend(str(p) for p in sorted((display / folder).rglob('*'))
                      if p.is_file() and not p.is_symlink() and p.suffix in ('.c', '.h'))
     paths.append(str(display / 'Makefile'))
+    # Immutable font assets can exceed the log/file ceiling; retain their hashes
+    # and dependency manifest, and recover their exact bytes from the release.
+    if (display / 'assets/dependencies.json').is_file():
+        paths.append(str(display / 'assets/dependencies.json'))
 files = []
 for name in paths:
     p = Path(name)

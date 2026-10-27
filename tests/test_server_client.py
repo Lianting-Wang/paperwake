@@ -214,13 +214,14 @@ class ClientTests(unittest.TestCase):
 
 
 class DisplayTests(unittest.TestCase):
-    def test_fixed_ascii_limits_and_types(self):
+    def test_unicode_limits_and_types(self):
         good = {'title': 't' * 40, 'status': 's' * 24,
                 'rows': [{'label': 'l' * 20, 'value': 'v' * 48} for _ in range(6)]}
         self.assertEqual(client.validate_display(good), good)
         self.assertEqual(client.validate_display(dict(good, rows=[{'label': 'x', 'value': ''}]))['rows'][0]['value'], '')
+        self.assertEqual(client.validate_display(dict(good, title='中文'))['title'], '中文')
         invalid = [dict(good, title=''), dict(good, title='t' * 41), dict(good, status='s' * 25),
-                   dict(good, status=''), dict(good, title='中文'), dict(good, title='line\n'),
+                   dict(good, status=''), dict(good, title='\x00'), dict(good, title='line\n'),
                    dict(good, rows=good['rows'] + good['rows']), dict(good, rows={}),
                    dict(good, rows=[{'label': '', 'value': ''}]),
                    dict(good, rows=[{'label': 'l' * 21, 'value': ''}]),

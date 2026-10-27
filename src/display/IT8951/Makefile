@@ -2,11 +2,12 @@ DIR_Config   = ./lib/Config
 DIR_EPD      = ./lib/e-Paper
 DIR_FONTS    = ./lib/Fonts
 DIR_GUI      = ./lib/GUI
+DIR_JSON     = ./lib/json
 DIR_Examples = ./singlepage
 
 DIR_BIN      = ./bin
 
-OBJ_C = $(wildcard ${DIR_Config}/*.c ${DIR_EPD}/*.c ${DIR_FONTS}/*.c ${DIR_GUI}/*.c ${DIR_Examples}/*.c)
+OBJ_C = $(wildcard ${DIR_Config}/*.c ${DIR_EPD}/*.c ${DIR_GUI}/*.c ${DIR_JSON}/*.c ${DIR_Examples}/*.c)
 OBJ_O = $(patsubst %.c,${DIR_BIN}/%.o,$(notdir ${OBJ_C}))
 
 TARGET = epd
@@ -17,9 +18,9 @@ MSG = -g -O0 -Wall
 DEBUG = -D USE_DEBUG
 STD = -std=gnu99
 
-CFLAGS += $(MSG) $(DEBUG) $(STD)
+CFLAGS += $(MSG) $(DEBUG) $(STD) $(shell pkg-config --cflags freetype2)
 
-LIB_USE = -lm -lrt -lpthread
+LIB_USE = -lm -lrt -lpthread $(shell pkg-config --libs freetype2)
 
 LIB = BCM
 # LIB = LGPIO
@@ -52,6 +53,9 @@ ${DIR_BIN}/%.o: ${DIR_GUI}/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 ${DIR_BIN}/%.o: ${DIR_Examples}/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+${DIR_BIN}/%.o: ${DIR_JSON}/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 ${DIR_BIN}/%.d: ${DIR_Config}/%.c

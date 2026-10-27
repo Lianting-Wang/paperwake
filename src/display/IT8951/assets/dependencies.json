@@ -1,0 +1,51 @@
+{
+  "noto_revision": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+  "yyjson_version": "0.13.0",
+  "files": [
+    {
+      "path": "assets/fonts/NotoSansSC-Regular.otf",
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf",
+      "sha256": "faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9"
+    },
+    {
+      "path": "assets/fonts/NotoSansSC-Medium.otf",
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/SC/NotoSansSC-Medium.otf",
+      "sha256": "7633f5a016d4dd95e685a69633d818aabc4644c4b08e26bd35b1b30c45ed5dda"
+    },
+    {
+      "path": "assets/fonts/LICENSE-Sans.txt",
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
+      "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+    },
+    {
+      "path": "assets/fonts/NotoSerifSC-Regular.otf",
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Serif/SubsetOTF/SC/NotoSerifSC-Regular.otf",
+      "sha256": "e8f396decc1f0963a016a989c3d8852e863d1350996f573860a80767c83a1cd3"
+    },
+    {
+      "path": "assets/fonts/NotoSerifSC-Medium.otf",
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Serif/SubsetOTF/SC/NotoSerifSC-Medium.otf",
+      "sha256": "e4e9beb5aaeb951e101aa8f122e2a6801ea9e48ac9f9b6bdfeef2436b55bc8ee"
+    },
+    {
+      "path": "assets/fonts/LICENSE-Serif.txt",
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Serif/LICENSE",
+      "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+    },
+    {
+      "path": "lib/json/yyjson.c",
+      "url": "https://raw.githubusercontent.com/ibireme/yyjson/0.13.0/src/yyjson.c",
+      "sha256": "d2d58ef0a3b2267862dc363832c4f3185fd375aea933d5d3419d1a940d6ece2e"
+    },
+    {
+      "path": "lib/json/yyjson.h",
+      "url": "https://raw.githubusercontent.com/ibireme/yyjson/0.13.0/src/yyjson.h",
+      "sha256": "ef803cda5c06b8962face6dfa39c3284b3bcf3e73f4d7317664690cc779679ca"
+    },
+    {
+      "path": "lib/json/LICENSE",
+      "url": "https://raw.githubusercontent.com/ibireme/yyjson/0.13.0/LICENSE",
+      "sha256": "45e384d3d52c73cba3a64d6e6c25d47cd738cd8a55c30629e3201046eda62947"
+    }
+  ]
+}

@@ -178,3 +178,5 @@
 .screen-render-message[hidden]{display:none}
 .preview-context-note{margin-top:7px}
 @media(max-width:650px){.screen-tools{font-size:8px}.management-page .screen{border-width:4px}}
+
+.editor-row textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:44px;font:inherit;font-size:13px;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:10px;background:#fff}

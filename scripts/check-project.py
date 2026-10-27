@@ -2,6 +2,7 @@
 """Validate maintained files and run offline regression checks."""
 import ast
 import hashlib
+import json
 import subprocess
 import sys
 
@@ -21,6 +22,10 @@ def main():
     archive = ROOT / 'vendor/bcm2835-1.60.tar.gz'
     if hashlib.sha256(archive.read_bytes()).hexdigest() != '333e7ceee895e910c29098074773ee86bcab4a82c2af0cf083c4533767e52d27':
         raise ValueError('bcm2835 source archive checksum mismatch')
+    display = ROOT / 'src/display/IT8951'
+    for asset in json.loads((display / 'assets/dependencies.json').read_text())['files']:
+        if hashlib.sha256((display / asset['path']).read_bytes()).hexdigest() != asset['sha256']:
+            raise ValueError('Renderer dependency checksum mismatch: ' + asset['path'])
     subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', str(ROOT / 'tests'), '-v'],
                    cwd=ROOT, check=True)
     print('Offline checks passed. No hardware tasks or shutdown commands were executed.')

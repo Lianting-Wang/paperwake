@@ -108,9 +108,9 @@ class ServerTests(unittest.TestCase):
     def test_english_statuses_forms_history_and_errors(self):
         self.switch_language('en')
         self.login()
-        response = self.settings(title='你好')
+        response = self.settings(title='bad\nline')
         self.assertEqual(response.status_code, 400)
-        self.assertIn(b'Title accepts English', response.data)
+        self.assertIn(b'Enter valid Unicode text', response.data)
         self.settings()
         self.assertIn(b'Settings apply at the next check-in.', self.client.get('/').data)
         self.check_in()
@@ -283,7 +283,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.client.post('/logout', data={'csrf_token': self.csrf('/')}).status_code, 302)
         self.assertEqual(self.client.get('/').status_code, 302)
 
-    def test_settings_updates_content_debug_version_and_rejects_unicode(self):
+    def test_settings_updates_unicode_content_debug_version(self):
         self.login()
         self.assertEqual(self.settings(debug='on').status_code, 302)
         response = self.check_in().json
@@ -293,8 +293,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.settings().status_code, 302)
         self.assertEqual(self.check_in('boot-2').json['content_version'], 2)
         self.assertIs(self.check_in('boot-2').json['debug'], False)
-        self.assertEqual(self.settings(title='你好').status_code, 400)
-        self.assertEqual(self.check_in('boot-3').json['display']['title'], 'Today')
+        self.assertEqual(self.settings(title='你好').status_code, 302)
+        self.assertEqual(self.check_in('boot-3').json['display']['title'], '你好')
         self.assertEqual(self.settings(title='x' * 41).status_code, 400)
         self.assertEqual(self.settings(label_0='', value_0='orphaned value').status_code, 400)
         self.assertEqual(self.client.post('/devices/test-screen/settings', data={'title': 'Bad'}).status_code, 400)
@@ -383,9 +383,9 @@ class ServerTests(unittest.TestCase):
         self.login()
         self.assertEqual(self.settings().headers['Location'], '/devices/test-screen/settings')
         self.assertEqual(self.save_wake_policy().headers['Location'], '/devices/test-screen/wake-plan')
-        invalid_content = self.settings(title='你好', debug='on')
+        invalid_content = self.settings(title='你好' * 21, debug='on')
         self.assertEqual(invalid_content.status_code, 400)
-        self.assertIn('value="你好"'.encode(), invalid_content.data)
+        self.assertIn(('value="' + '你好' * 21 + '"').encode(), invalid_content.data)
         self.assertIn(b'name="debug" checked', invalid_content.data)
         self.assertNotIn(b'name="wake_schedule"', invalid_content.data)
         saved = self.device()
@@ -464,7 +464,7 @@ class ServerTests(unittest.TestCase):
                 self.assertIsNone(self.device()['wake_policy_json'])
         self.save_wake_policy()
         # Screen validation errors and schedule validation errors stay independent.
-        self.assertEqual(self.settings(title='你好').status_code, 400)
+        self.assertEqual(self.settings(title='你好').status_code, 302)
         self.assertIsNotNone(self.device()['wake_policy_json'])
 
     def test_wake_columns_upgrade_is_safe_with_multiple_starting_workers(self):

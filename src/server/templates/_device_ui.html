@@ -10,7 +10,7 @@
 
 {% macro screen_preview(device_id) %}
 {% set preview_url = url_for('screen_preview', device_id=device_id) %}
-<div class="screen-preview" data-screen-preview data-url="{{ preview_url }}" data-error="{{ t('屏幕预览加载失败，请重试。') }}" data-invalid="{{ t('请使用显示范围内的英文、数字和 ASCII 符号。') }}" data-loading="{{ t('正在更新预览…') }}">
+<div class="screen-preview" data-screen-preview data-url="{{ preview_url }}" data-error="{{ t('屏幕预览加载失败，请重试。') }}" data-invalid="{{ t('文字超出区域、字体缺字或内容格式无效，请调整内容或版式。') }}" data-loading="{{ t('正在更新预览…') }}">
   <div class="screen"><a href="{{ preview_url }}" data-preview-open target="_blank" rel="noopener"><img data-preview-image src="{{ preview_url }}" width="1872" height="1404" alt="{{ t('电子纸屏幕预览') }}"></a></div>
   <p class="screen-render-message" data-preview-message role="status" hidden></p>
   <div class="screen-tools"><span>{{ t('设备原生布局与字体') }}</span><a href="{{ preview_url }}" data-preview-open target="_blank" rel="noopener">{{ t('查看原尺寸') }} <span aria-hidden="true">↗</span></a></div>

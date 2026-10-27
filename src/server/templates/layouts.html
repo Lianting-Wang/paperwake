@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}{{ t('版式') }} · {{ t('电子纸管理') }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='management.css', v=asset_version('management.css')) }}"><link rel="stylesheet" href="{{ url_for('static', filename='layouts.css', v=asset_version('layouts.css')) }}">{% endblock %}
+{% block content %}
+<div class="management-page" id="layout-editor" data-url="{{ url_for('layout_editor', device_id=device.device_id) }}" data-preview="{{ url_for('layout_preview', device_id=device.device_id) }}" data-csrf="{{ csrf_token() }}">
+  <div class="page-heading management-heading"><div><p class="eyebrow">{{ t('版式工作室') }}</p><h1>{{ t('给信息留一个好位置。') }}</h1><p class="page-description">{{ t('内容保持不变，排版由你决定。') }}</p></div><span class="heading-note">{{ t('设备下次唤醒时应用') }}</span></div>
+  <div class="layout-status"><span>{{ t('当前使用') }}：<strong data-active-name>{{ active.id }}</strong></span><span>{{ t('显示版本') }} {{ device.content_version }} · {% if applied == device.content_version %}{{ t('设备已完成刷新') }}{% else %}{{ t('等待设备回报新版本') }}{% endif %}</span></div>
+  <div class="layout-toolbar">
+    <label>{{ t('选择版式') }}<select data-layout-select aria-label="{{ t('选择版式') }}"></select></label>
+    <button type="button" class="secondary" data-action="copy">{{ t('复制为自定义版式') }}</button>
+    <button type="button" class="text-button" data-action="delete">{{ t('删除') }}</button>
+    <span class="layout-toolbar-spacer"></span>
+    <button type="button" class="secondary" data-action="save">{{ t('保存草稿') }}</button>
+    <button type="button" class="primary" data-action="apply">{{ t('应用到设备') }}</button>
+  </div>
+  <p data-message class="layout-message" role="status" aria-live="polite"></p>
+  <div class="layout-workspace">
+    <section class="layout-stage-panel">
+      <div class="layout-canvas-tools"><span>1872 × 1404</span><div><button type="button" class="text-button" data-action="undo">{{ t('撤销') }}</button><button type="button" class="text-button" data-action="redo">{{ t('重做') }}</button><label><input type="checkbox" data-show-regions>{{ t('显示区域') }}</label></div></div>
+      <div class="layout-canvas" data-canvas tabindex="0" aria-label="{{ t('版式画布，选择组件后可拖动或使用方向键微调') }}">
+        <img data-canvas-image alt="{{ t('电子纸真实渲染预览') }}" width="1872" height="1404">
+        <div data-regions></div><div class="layout-guide vertical" data-guide-x hidden></div><div class="layout-guide horizontal" data-guide-y hidden></div>
+      </div>
+      <p class="layout-preview-caption">{{ t('预览使用与设备相同的字体和绘图程序；此处的时间与电量为排版示例。') }}</p>
+      <div class="layout-add-bar"><button type="button" class="secondary" data-action="add-text">{{ t('添加文字') }}</button><button type="button" class="secondary" data-action="add-line">{{ t('添加分隔线') }}</button><span>{{ t('拖动调整位置，右下角调整区域大小。') }}</span></div>
+      <ul class="layout-issues" data-issues role="alert" hidden></ul>
+    </section>
+    <aside class="panel layout-properties">
+      <label>{{ t('版式名称') }}<input data-name maxlength="64"></label>
+      <p class="field-note" data-builtin-note>{{ t('内置模板可直接应用；复制后即可自由编辑。') }}</p>
+      <label>{{ t('组件') }}<select data-element-select></select></label>
+      <form data-properties>
+        <div class="layout-coordinate-grid">{% for key, label in [('x','横向位置'),('y','纵向位置'),('width','区域宽度'),('height','区域高度')] %}<label>{{ t(label) }}<input type="number" name="{{ key }}" min="{{ 0 if key in ['x','y'] else 1 }}" step="1" required></label>{% endfor %}</div>
+        <label>{{ t('显示内容') }}<select name="binding"><option value="">{{ t('固定文字') }}</option><option value="title">{{ t('标题') }}</option><option value="status">{{ t('状态') }}</option><option value="clock">{{ t('更新时间') }}</option><option value="date">{{ t('日期') }}</option><option value="battery">{{ t('电量') }}</option>{% for i in range(6) %}<option value="rows.{{ i }}.label">{{ t('第 {number} 行名称', number=i+1) }}</option><option value="rows.{{ i }}.value">{{ t('第 {number} 行内容', number=i+1) }}</option>{% endfor %}</select></label>
+        <label data-text-property>{{ t('固定文字') }}<textarea name="text" rows="3" maxlength="256"></textarea></label>
+        <div class="layout-coordinate-grid" data-text-property><label>{{ t('前缀') }}<input name="prefix" maxlength="32"></label><label>{{ t('后缀') }}<input name="suffix" maxlength="32"></label></div>
+        <div class="layout-coordinate-grid" data-text-property><label>{{ t('字体') }}<select name="font"><option value="sans">{{ t('黑体') }}</option><option value="serif">{{ t('宋体') }}</option></select></label><label>{{ t('字重') }}<select name="weight"><option value="400">{{ t('普通') }}</option><option value="500">{{ t('中等') }}</option></select></label></div>
+        <div class="layout-coordinate-grid" data-text-property><label>{{ t('字号') }}<input name="size" type="number" min="16" max="160" step="1" required></label><label>{{ t('行距') }}<input name="line_height" type="number" min="1" max="2" step="0.05" required></label></div>
+        <div class="layout-coordinate-grid"><label data-text-property>{{ t('对齐') }}<select name="align"><option value="left">{{ t('左对齐') }}</option><option value="center">{{ t('居中') }}</option><option value="right">{{ t('右对齐') }}</option></select></label><label>{{ t('灰度') }}<input name="gray" type="number" min="0" max="15" step="1" required></label></div>
+        <button class="text-button danger-text" type="button" data-action="remove">{{ t('移除组件') }}</button>
+      </form>
+      <p class="field-note">{{ t('方向键移动 1 像素，Shift 加方向键移动 10 像素。保存草稿不会改变设备当前使用的版式。') }}</p>
+    </aside>
+  </div>
+</div>
+<script id="layout-data" type="application/json">{{ {'templates':templates,'active':active,'strings':{
+  'builtin':t('内置'),'custom':t('自定义'),'saved':t('草稿已保存，尚未应用到设备。'),
+  'applied':t('已安排在设备下次唤醒时应用。'),'loading':t('正在更新预览…'),
+  'unsaved':t('有未保存的修改。'),'readonly':t('请先复制内置模板。'),
+  'overflow':t('文字超出区域，请扩大区域或减小字号。'),'missing_glyph':t('字体缺少此字符，请更换文字。'),
+  'failed':t('操作失败，请重试。'),'limit':t('每个版式最多 32 个组件。'),
+  'choose':t('选择组件'),'text':t('固定文字'),'line':t('分隔线'),
+  'adjust':t('请先调整标记的组件。'),'copy':t('副本'),'pending':t('等待下一次唤醒'),
+  'newtext':t('新的文字'),'empty':t('请填写版式名称。')
+}}|tojson }}</script>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='layouts.js', v=asset_version('layouts.js')) }}" defer></script>{% endblock %}

@@ -20,6 +20,6 @@ file /out/epd
 {
     date -u '+Built at: %Y-%m-%dT%H:%M:%SZ'
     gcc --version
-    dpkg-query -W -f='${Package} ${Version}\n' gcc libc6 make
+    dpkg-query -W -f='${Package} ${Version}\n' gcc libc6 make libfreetype6
     sha256sum /workspace/vendor/bcm2835-1.60.tar.gz
 } > /out/build-info.txt

@@ -24,15 +24,19 @@ server 无法通过关机意图证明实际断电；实际关机请求结果在�
 | `config/*.json` | 显式选定后部署到 `/etc/pisched/config.json` |
 | `deploy/systemd/pisched.service` | `/etc/systemd/system/pisched.service` |
 | `build/display/epd` | 默认 `/home/wlt/IT8951/epd` |
-| `src/display/IT8951/singlepage/page_render.c` | 设备和网页共用的无硬件绘图逻辑，配合 `lib/Fonts/` 位图字库 |
+| `src/display/IT8951/singlepage/page_render.c` | 设备和网页共用的无硬件绘图逻辑，配合 FreeType 与 `assets/fonts/` 中文字体 |
 | `build/display/libpage-preview.so` | 管理服务所在主机架构的预览库；不包含 GPIO/SPI 驱动 |
 | `src/server/` | Flask + Gunicorn + SQLite 管理服务，见 [服务指南](server.md) |
 
 设备 token 位于配置的独立文件，不进入配置环境、日志或 Git。发布包不含 token，安装时单独写入并限制为 root 可读。
 
-采集任务通过环境读取已校验配置、事件 ID、页面、HTTP 耗时和父进程本轮实际任务期限。显示进程消费相同一份电池样本，并通过 `PISCHED_PAGE_TITLE`、`PISCHED_PAGE_STATUS`、`PISCHED_PAGE_LABEL_1..6`、`PISCHED_PAGE_VALUE_1..6` 读取内容。C 在硬件初始化/清屏之前验证 ASCII 与长度；内容无效不刷新。
+采集任务通过环境读取已校验配置、事件 ID、内容与版式、HTTP 耗时和父进程本轮实际任务期限。`display_model.py` 为服务器和设备共用 UTF-8/版式校验；设备发布时一起安装到 `/opt/pisched/`。采集完成后创建短期 UTF-8 JSON 文档，通过 `PISCHED_PAGE_FILE` 传入显示程序，结束后删除。`PISCHED_FONT_DIR` 指向显示目录下的 `assets/fonts`，字体不随每轮请求下载。
 
-`singlepage/page.c` 收集设备时钟、电量和内容后调用 `Page_Render`，随后交给硬件刷新。网页通过 `src/server/preview.py` 调用同一绘图函数，并把 4 bpp 帧缓冲转换为灰度 PNG；预览使用面向阅读者的方向，不应用传输给实体屏幕时的镜像。设备端现有版式不变，字体、坐标、灰阶、40 字符值换行和页脚无需维护第二份实现。预览库按绘图源码和字库校验版本，旧构建会拒绝加载；Waveshare Paint 的全局状态由进程内锁保护。
+`singlepage/page.c` 在初始化硬件前检查完整文档与两种有效屏宽；取得实际对齐要求后先生成帧，只有有效帧才能清屏提交。网页通过 `src/server/preview.py` 调用同一个 `Page_RenderDocument`，将 4 bpp 帧缓冲转换为灰度 PNG。预览使用阅读方向，设备传输时沿用原水平镜像；1872/1856 宽度按同一参考画布映射。FreeType 负责字宽与字形，文字自动换行，溢出/缺字返回组件级诊断；编辑草稿可显示裁切结果，但设备拒绝刷新无效文档。
+
+版式库和草稿保存在 SQLite，设备使用不可变的已应用版式快照。保存草稿不修改设备配置；应用时原子复制快照并递增 `content_version`。报到响应的 `display.layout` 含完整小型配置，下一次正常唤醒使用；不额外连接设备、不改唤醒频次。只有显示程序成功返回后，采集报告才包含 `applied_content_version`、`layout_id`、`layout_revision`。下载版本和刷新成功版本分别显示。
+
+预览库对绘图源码、解析器及字体计算校验版本，旧构建拒绝加载；Waveshare Paint 全局状态由进程内锁保护。新增组件或改渲染逻辑需重建服务器镜像和 ARM64 程序，日常版式编辑只保存 JSON。
 
 ## 留机与兜底
 

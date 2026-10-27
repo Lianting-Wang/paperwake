@@ -1,5 +1,6 @@
 """Two management UI languages; device content and protocol stay independent."""
 from flask import has_request_context, request
+import re
 
 LANGUAGE_COOKIE = 'epaper_language'
 LANGUAGES = ('zh', 'en')
@@ -269,11 +270,59 @@ ENGLISH = {
 }
 
 
+ENGLISH.update({
+    '版式':'Layouts','纸刊排版':'Editorial','极简信息板':'Minimal','版式工作室':'LAYOUT STUDIO','给信息留一个好位置。':'Give every detail its place.',
+    '内容保持不变，排版由你决定。':'Keep your content. Make the layout yours.',
+    '设备下次唤醒时应用':'Applies at the next wake-up','当前使用':'In use','显示版本':'Display version',
+    '设备已完成刷新':'Device refresh completed','等待设备回报新版本':'Awaiting the device’s version report',
+    '选择版式':'Choose a layout','复制为自定义版式':'Duplicate to customize','删除':'Delete',
+    '保存草稿':'Save draft','应用到设备':'Apply to device','撤销':'Undo','重做':'Redo','显示区域':'Show regions',
+    '版式画布，选择组件后可拖动或使用方向键微调':'Layout canvas. Select a component, then drag or use arrow keys.',
+    '电子纸真实渲染预览':'Native e-paper rendering preview',
+    '预览使用与设备相同的字体和绘图程序；此处的时间与电量为排版示例。':
+        'Rendered with the device’s fonts and drawing code. Time and battery here are layout examples.',
+    '添加文字':'Add text','添加分隔线':'Add divider','拖动调整位置，右下角调整区域大小。':
+        'Drag to move. Resize from the bottom-right corner.',
+    '版式名称':'Layout name','内置模板可直接应用；复制后即可自由编辑。':
+        'Apply a built-in template directly, or duplicate it to edit.',
+    '组件':'Component','横向位置':'X position','纵向位置':'Y position','区域宽度':'Width','区域高度':'Height',
+    '显示内容':'Content binding','固定文字':'Static text','更新时间':'Updated at','日期':'Date','前缀':'Prefix','后缀':'Suffix',
+    '字体':'Font','黑体':'Sans serif','宋体':'Serif','字重':'Weight','普通':'Regular','中等':'Medium',
+    '字号':'Font size','行距':'Line height','对齐':'Alignment','左对齐':'Left','居中':'Center','右对齐':'Right',
+    '灰度':'Gray level','移除组件':'Remove component',
+    '方向键移动 1 像素，Shift 加方向键移动 10 像素。保存草稿不会改变设备当前使用的版式。':
+        'Arrow keys move 1 px; Shift + arrow moves 10 px. Saving a draft leaves the applied layout unchanged.',
+    '内置':'Built-in','自定义':'Custom','草稿已保存，尚未应用到设备。':'Draft saved. Apply it when ready.',
+    '已安排在设备下次唤醒时应用。':'Scheduled for the device’s next wake-up.',
+    '有未保存的修改。':'You have unsaved changes.','请先复制内置模板。':'Duplicate the built-in template first.',
+    '文字超出区域，请扩大区域或减小字号。':'Text does not fit. Enlarge the region or reduce the font size.',
+    '字体缺少此字符，请更换文字。':'The font does not contain this character. Update the text.',
+    '操作失败，请重试。':'The action failed. Please try again.','每个版式最多 32 个组件。':'A layout supports up to 32 components.',
+    '选择组件':'Select a component','分隔线':'Divider','请先调整标记的组件。':'Adjust the highlighted components first.',
+    '副本':'Copy','等待下一次唤醒':'Waiting for the next wake-up','新的文字':'New text','请填写版式名称。':'Enter a layout name.',
+    '支持中文、英文和数字；未使用的信息行请留空。文字放不下时，可在版式页调整。':
+        'Chinese, English and numbers are supported. Leave unused rows blank. Adjust text regions in Layouts if needed.',
+    '要展示的信息':'Your content','更新时间与电量使用最近一次设备报告；这不是屏幕实时截图。':
+        'Time and battery come from the latest device report. This is not a live screen capture.',
+    '调整版式':'Edit layout','文字超出区域、字体缺字或内容格式无效，请调整内容或版式。':
+        'Check text fit, missing glyphs and content format. Adjust the content or layout.',
+    '文字超出区域或字体缺字，请调整标记的组件后再应用。':'Fix text overflow or missing glyphs before applying.',
+    '版式已被其他窗口修改，请重新载入；当前编辑内容尚未覆盖服务器。':
+        'Another window updated this layout. Reload to continue; your edit has not overwritten the server.',
+    '版式已变更，请重新载入。':'The layout changed. Reload it first.',
+    '请先切换其他版式，再删除当前使用的版式。':'Apply another layout before deleting this one.',
+})
+
+
 def get_language():
     value = request.cookies.get(LANGUAGE_COOKIE) if has_request_context() else None
     return value if value in LANGUAGES else 'zh'
 
 
 def t(message, **values):
+    if get_language() == 'en' and isinstance(message, str):
+        match = re.fullmatch(r'文字须为有效 Unicode，长度 (\d+)–(\d+) 个字符。', message)
+        if match:
+            return f'Enter valid Unicode text, {match[1]}–{match[2]} characters.'
     translated = ENGLISH.get(message, message) if get_language() == 'en' else message
     return translated.format(**values) if values else translated

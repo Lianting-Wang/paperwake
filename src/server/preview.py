@@ -6,6 +6,7 @@ import argparse
 import ctypes
 from functools import lru_cache
 import hashlib
+import json
 from pathlib import Path
 import shutil
 import struct
@@ -15,8 +16,13 @@ import tempfile
 import threading
 import zlib
 
+if __name__ == '__main__':
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.scheduler.display_model import default_layout, validate_display, text
+
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / 'display/IT8951'
 DEFAULT_LIBRARY = Path(__file__).resolve().parents[2] / 'build/display/libpage-preview.so'
+FONT_DIRECTORY = SOURCE_ROOT / 'assets/fonts'
 _NATIVE_LOCK = threading.Lock()  # Waveshare Paint keeps a global framebuffer pointer.
 _SWAP_NIBBLES = bytes((value >> 4) | ((value & 15) << 4) for value in range(256))
 
@@ -29,8 +35,8 @@ def native_sources():
     return sorted([SOURCE_ROOT / 'singlepage/page_render.c', SOURCE_ROOT / 'singlepage/page_render.h',
                    SOURCE_ROOT / 'lib/GUI/GUI_Paint.c', SOURCE_ROOT / 'lib/GUI/GUI_Paint.h',
                    SOURCE_ROOT / 'lib/Config/DEV_Config.h', SOURCE_ROOT / 'lib/Config/Debug.h',
-                   *list((SOURCE_ROOT / 'lib/Fonts').glob('*.c')),
-                   *list((SOURCE_ROOT / 'lib/Fonts').glob('*.h'))])
+                   *list((SOURCE_ROOT / 'lib/json').glob('*')),
+                   *list((SOURCE_ROOT / 'assets/fonts').glob('*'))])
 
 
 def source_revision():
@@ -50,25 +56,23 @@ def build_library(destination):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent) as folder:
         output = Path(folder) / 'preview.so'
+        flags = freetype_flags()
         command = [compiler, '-dynamiclib' if sys.platform == 'darwin' else '-shared', '-fPIC', '-O2',
                    '-std=gnu99', '-funsigned-char', '-I' + str(SOURCE_ROOT),
                    '-DPAGE_RENDER_REVISION="' + source_revision() + '"',
-                   *[str(path) for path in native_sources() if path.suffix == '.c'], '-lm', '-o', str(output)]
+                   *[str(path) for path in native_sources() if path.suffix == '.c'], *flags, '-lm', '-o', str(output)]
         subprocess.run(command, check=True, capture_output=True, timeout=90)
         output.replace(destination)
     return destination
 
 
-class PageContent(ctypes.Structure):
-    _fields_ = [('title', ctypes.c_char_p), ('status', ctypes.c_char_p),
-                ('labels', ctypes.c_char_p * 6), ('values', ctypes.c_char_p * 6),
-                ('row_count', ctypes.c_uint)]
-
-
-def _ascii(value, limit):
-    if not isinstance(value, str) or len(value) > limit or any(not 32 <= ord(char) <= 126 for char in value):
-        raise ValueError('Preview text must be printable ASCII within the display limits.')
-    return value.encode('ascii')
+def freetype_flags():
+    import shlex
+    command = shutil.which('pkg-config') or '/opt/homebrew/bin/pkg-config'
+    try:
+        return shlex.split(subprocess.check_output([command, '--cflags', '--libs', 'freetype2'], text=True))
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise PreviewUnavailable('Install FreeType development files and pkg-config to build the renderer.') from exc
 
 
 def _chunk(kind, data):
@@ -93,32 +97,45 @@ class PageRenderer:
                 raise PreviewUnavailable('Page preview is out of date; rebuild it from the display sources.')
         except (OSError, AttributeError) as exc:
             raise PreviewUnavailable('Build the page preview before starting the management service.') from exc
-        self.library.Page_Render.argtypes = [ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t,
-            ctypes.c_uint, ctypes.c_uint, ctypes.c_int, ctypes.POINTER(PageContent), ctypes.c_char_p, ctypes.c_char_p]
-        self.library.Page_Render.restype = ctypes.c_int
+        self.library.Page_RenderDocument.argtypes = [ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t,
+            ctypes.c_uint, ctypes.c_uint, ctypes.c_int, ctypes.c_char_p, ctypes.c_size_t,
+            ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_int]
+        self.library.Page_RenderDocument.restype = ctypes.c_int
 
     def render(self, display, clock='N/A', battery='N/A', width=1872):
-        rows = display.get('rows', [])
-        if not isinstance(rows, list) or len(rows) > 6 or any(not isinstance(row, dict) for row in rows) or width not in (1872, 1856):
-            raise ValueError('Invalid preview rows or panel width.')
-        title = _ascii(display.get('title'), 40)
-        status = _ascii(display.get('status'), 24)
-        values = tuple((_ascii(row.get('label'), 20), _ascii(row.get('value'), 48)) for row in rows)
-        return self._render(title, status, values, _ascii(clock, 31), _ascii(battery, 31), width)
+        image, issues = self.preview(display, clock, battery, width)
+        if issues:
+            raise ValueError('文字超出区域或字体缺字，请在版式编辑器中调整。')
+        return image
+
+    def preview(self, display, clock='N/A', battery='N/A', width=1872):
+        display = validate_display(display, draft=True)
+        text(clock, 63)
+        text(battery, 31)
+        document = dict(display, layout=display.get('layout', default_layout()), clock=clock, battery=battery)
+        return self._render(json.dumps(document, ensure_ascii=False, separators=(',', ':')).encode(), width)
+
+    def validate(self, display):
+        # Reserve stable bounds for all generated metadata, at both panel widths.
+        for width in (1872, 1856):
+            _, issues = self.preview(display, '2026-12-31 23:59 UTC-04:00', '100.0%', width)
+            if issues:
+                return issues
+        return []
 
     @lru_cache(maxsize=16)
-    def _render(self, title, status, rows, clock, battery, width):
-        content = PageContent(title=title, status=status, row_count=len(rows))
-        for index, (label, value) in enumerate(rows):
-            content.labels[index], content.values[index] = label, value
+    def _render(self, document, width):
+        if width not in (1872, 1856):
+            raise ValueError('Invalid preview width.')
         height = 1404
         frame = (ctypes.c_ubyte * (width // 2 * height))()
+        issues = ctypes.create_string_buffer(8192)
         with _NATIVE_LOCK:
-            result = self.library.Page_Render(frame, len(frame), width, height, 0,
-                                               ctypes.byref(content), clock, battery)
-        if result:
-            raise ValueError('The display renderer rejected the preview.')
-        return png(bytes(frame), width, height)
+            result = self.library.Page_RenderDocument(frame, len(frame), width, height, 0,
+                document, len(document), str(FONT_DIRECTORY).encode(), issues, len(issues), 1)
+        if result == 1:
+            raise PreviewUnavailable('The native renderer or its font resources are unavailable.')
+        return png(bytes(frame), width, height), json.loads(issues.value)
 
 
 @lru_cache(maxsize=4)

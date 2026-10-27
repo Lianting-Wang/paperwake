@@ -13,7 +13,7 @@
 
 ## 构建环境
 
-`docker/Dockerfile` 固定 ARM64 Debian 13 基础镜像 digest，安装 GCC/Make，校验并安装仓库内 bcm2835 1.60 源码包。APT 包版本尚未逐项固定。
+`docker/Dockerfile` 固定 ARM64 Debian 13 基础镜像 digest，安装 GCC/Make、pkg-config 与 FreeType 开发库，校验并安装仓库内 bcm2835 1.60 源码包。APT 包版本尚未逐项固定。
 
 ```sh
 make image
@@ -39,7 +39,7 @@ make snapshot HOST=pi
 - `rootfs/`：调度器、共用计划模块、已有唤醒计划缓存、任务、配置、systemd unit、启动配置、显示源码及设备上的 `epd`、日志和指标。
 - `manifest.json`：每个文件的远端路径与 SHA-256，以及设备时间、系统、服务状态和启动统计。
 
-脚本通过 `sudo -n` 只读取指定路径（含 root 所有的状态文件），不获取 `.ssh`、PiSugar Web 密码配置或其他账号数据。单个文件超过 8 MiB 会跳过并返回非零退出码；后续日志变大时应单独归档。该快照是项目级备份，不是整张 SD 卡镜像，也不包含网络凭据、全部系统包或系统还原能力。
+脚本通过 `sudo -n` 只读取指定路径（含 root 所有的状态文件），不获取 `.ssh`、PiSugar Web 密码配置或其他账号数据。字体为不可变发布资源，快照保留其依赖清单，恢复字体使用对应发布包。其他单个文件超过 8 MiB 会跳过并返回非零退出码；后续日志变大时应单独归档。该快照是项目级备份，不是整张 SD 卡镜像，也不包含网络凭据、全部系统包或系统还原能力。
 
 快照目录被 Git 忽略；需要跨电脑使用的设备备份应另行复制。
 
@@ -53,7 +53,7 @@ make preview CONFIG=config/local.json
 make release CONFIG=config/local.json
 ```
 
-`prepare-release.py` 检查配置和 ARM64 ELF 标识，拒绝覆盖已有输出目录。发布包位于 `build/releases/UTC时间戳/`，包含 `rootfs/`、`release.json` 和 `INSTALL.txt`。包含调度器、HTTP 客户端及共用 `wake_plan.py`，安装时三个模块必须同步更新。构建产物与配置按原字节复制，不会悄悄替换时间表。显示源码及 Makefile 同时放入显示目录，并写入同一份哈希清单，保持设备维护源码与发布版本一致。
+`prepare-release.py` 检查配置和 ARM64 ELF 标识，拒绝覆盖已有输出目录。发布包位于 `build/releases/UTC时间戳/`，包含 `rootfs/`、`release.json` 和 `INSTALL.txt`。包含调度器、HTTP 客户端及共用 `wake_plan.py`，安装时共用模块必须同步更新，包括 `display_model.py`。构建产物与配置按原字节复制，不会悄悄替换时间表。显示源码、Makefile、固定版本中文字体及依赖清单同时放入显示目录，并写入同一份哈希清单，保持设备维护源码与发布版本一致。
 
 发布包将显示程序安装到 `/home/wlt/IT8951/epd`。更换显示路径时设置配置的 `display.path`；发布包按该路径准备对应文件树，安装命令也要使用相同目标。产物在目标系统上的运行及真实屏幕刷新需设备验证。
 
@@ -70,9 +70,11 @@ sudo install -m 0755 rootfs/opt/pisched/pisched.py /opt/pisched/pisched.py
 sudo install -m 0755 rootfs/opt/pisched/collect_metrics.py /opt/pisched/collect_metrics.py
 sudo install -m 0644 rootfs/opt/pisched/server_client.py /opt/pisched/server_client.py
 sudo install -m 0644 rootfs/opt/pisched/wake_plan.py /opt/pisched/wake_plan.py
+sudo install -m 0644 rootfs/opt/pisched/display_model.py /opt/pisched/display_model.py
+sudo apt-get install -y --no-install-recommends libfreetype6
 sudo install -m 0644 rootfs/etc/pisched/config.json /etc/pisched/config.json
 sudo install -m 0644 rootfs/etc/systemd/system/pisched.service /etc/systemd/system/pisched.service
-sudo cp -R rootfs/home/wlt/IT8951/lib rootfs/home/wlt/IT8951/singlepage /home/wlt/IT8951/
+sudo cp -R rootfs/home/wlt/IT8951/lib rootfs/home/wlt/IT8951/singlepage rootfs/home/wlt/IT8951/assets /home/wlt/IT8951/
 sudo install -m 0644 rootfs/home/wlt/IT8951/Makefile /home/wlt/IT8951/Makefile
 sudo install -m 0755 rootfs/home/wlt/IT8951/epd /home/wlt/IT8951/epd
 sudo systemctl daemon-reload

@@ -2,7 +2,7 @@ ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25
 FROM ${DEBIAN_IMAGE}
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential ca-certificates file \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates file pkg-config libfreetype-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY vendor/bcm2835-1.60.tar.gz /tmp/bcm2835-1.60.tar.gz

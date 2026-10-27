@@ -23,6 +23,7 @@ def prepare(config, epd, output):
         (ROOT / 'src/scheduler/pisched.py', 'opt/pisched/pisched.py', 0o755),
         (ROOT / 'src/scheduler/server_client.py', 'opt/pisched/server_client.py', 0o644),
         (ROOT / 'src/scheduler/wake_plan.py', 'opt/pisched/wake_plan.py', 0o644),
+        (ROOT / 'src/scheduler/display_model.py', 'opt/pisched/display_model.py', 0o644),
         (ROOT / 'src/tasks/collect_metrics.py', 'opt/pisched/collect_metrics.py', 0o755),
         (ROOT / 'deploy/systemd/pisched.service', 'etc/systemd/system/pisched.service', 0o644),
         (config, 'etc/pisched/config.json', 0o644),
@@ -33,7 +34,7 @@ def prepare(config, epd, output):
     display_source = ROOT / 'src/display/IT8951'
     display_target = Path(cfg['display']['path']).parent
     for source in sorted(display_source.rglob('*')):
-        if source.is_file() and (source.suffix in ('.c', '.h') or source.name == 'Makefile'):
+        if source.is_file() and (source.suffix in ('.c', '.h') or source.name == 'Makefile' or 'assets' in source.relative_to(display_source).parts or source.name == 'LICENSE'):
             target = display_target / source.relative_to(display_source)
             mappings.append((source, str(target).lstrip('/'), 0o644))
     for source, _, _ in mappings:

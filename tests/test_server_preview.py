@@ -37,14 +37,6 @@ def read_png(data):
     return width, height, pixel
 
 
-def font(size):
-    source = (SOURCE_ROOT / f'lib/Fonts/font{size}.c').read_text()
-    body = source[source.index('{') + 1:source.index('};')]
-    body = re.sub(r'//[^\n]*|/\*.*?\*/', '', body, flags=re.S)
-    data = bytes(int(value, 16) for value in re.findall(r'0x([0-9a-fA-F]+)', body))
-    return data, 14 if size == 20 else 11, size
-
-
 class ScreenPreviewTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -53,7 +45,6 @@ class ScreenPreviewTests(unittest.TestCase):
         cls.library = build_library(Path(cls.native.name) / 'preview.so')
         cls.renderer = PageRenderer(cls.library)
         cls.password_hash = generate_password_hash('preview-password', method='pbkdf2:sha256:1000')
-        cls.fonts = {size: font(size) for size in (16, 20)}
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -86,44 +77,34 @@ class ScreenPreviewTests(unittest.TestCase):
             return tuple(tuple(row) for row in get_db().execute('SELECT * FROM devices')), tuple(
                 tuple(row) for row in get_db().execute('SELECT * FROM events'))
 
-    def glyph(self, pixel, x, y, text, size=20, background=15):
-        data, width, height = self.fonts[size]
-        stride = (width + 7) // 8
-        for index, char in enumerate(text):
-            start = (ord(char) - 32) * height * stride
-            for row in range(height):
-                for col in range(width):
-                    expected = 0 if data[start + row * stride + col // 8] & (0x80 >> (col % 8)) else background
-                    self.assertEqual(pixel(x + index * width + col, y + row), expected)
+    def test_png_geometry_unicode_grays_and_wrapping(self):
+        from src.scheduler.display_model import default_layout
+        page = dict(self.page, title='中文 / English', rows=[{'label':'名称','value':'中文测试' * 12}] * 6)
+        for width in (1872,1856):
+            image, issues = self.renderer.preview(page, '2026-10-27 17:01', '100.0%', width)
+            self.assertEqual(issues, [])
+            w,h,pixel=read_png(image)
+            self.assertEqual((w,h),(width,1404))
+            self.assertEqual(pixel(10,10),15)
+            self.assertEqual(pixel(100,156),0)
+            self.assertTrue(any(pixel(x,y)<15 for x in range(96,800) for y in range(218,350)))
+        layout=default_layout()
+        layout['elements'][3]['height']=16
+        _,issues=self.renderer.preview(dict(page,layout=layout))
+        self.assertIn({'element_id':'title','code':'overflow'},issues)
+        with self.assertRaises(ValueError):
+            self.renderer.render(dict(page,layout=layout))
+        _,issues=self.renderer.preview(dict(self.page,title='😀'))
+        self.assertIn({'element_id':'title','code':'missing_glyph'},issues)
 
-    def test_png_reproduces_device_geometry_fonts_grays_and_wrapping(self):
-        page = dict(self.page, rows=[{'label': 'Row', 'value': '1' * 40 + 'abcdefgh'}] * 6)
-        width, height, pixel = read_png(self.renderer.render(page, '2026-10-27 17:01', '100.0%'))
-        self.assertEqual((width, height), (1872, 1404))
-        for x, y, gray in ((10, 10, 12), (51, 231, 15), (1233, 231, 13), (500, 179, 0), (51, 1293, 0)):
-            self.assertEqual(pixel(x, y), gray)
-        self.glyph(pixel, 50, 68, 'EPAPER ONLINE', background=12)
-        self.glyph(pixel, 50, 110, 'DEVICE SNAPSHOT', 16, 12)
-        self.glyph(pixel, 1272, 330, '2026-10-27 17:01', background=13)
-        self.glyph(pixel, 1272, 676, '100.0%', background=13)
-        self.glyph(pixel, 1272, 1022, 'SERVER CONNECTED', background=13)
-        self.glyph(pixel, 50, 1319, 'PI STATUS', 16)
-        for row in range(6):
-            self.glyph(pixel, 90, 270 + 155 * row, 'Row', 16)
-            self.glyph(pixel, 90, 298 + 155 * row, '1' * 40)
-            self.glyph(pixel, 90, 324 + 155 * row, 'abcdefgh')
-        width, height, pixel = read_png(self.renderer.render(page, width=1856))
-        self.assertEqual((width, height), (1856, 1404))
-        self.glyph(pixel, 1261, 1022, 'SERVER CONNECTED', background=13)
-
-    def test_parallel_drafts_do_not_share_the_paint_framebuffer(self):
-        def render(index):
-            page = dict(self.page, title=f'DRAFT {index}')
-            width, height, pixel = read_png(self.renderer.render(page, battery=f'{index}.0%'))
-            self.glyph(pixel, 50, 68, f'DRAFT {index}', background=12)
-            self.glyph(pixel, 1272, 676, f'{index}.0%', background=13)
+    def test_parallel_drafts_do_not_share_framebuffers(self):
+        pages=[dict(self.page,title=f'DRAFT {index}') for index in range(8)]
+        expected=[self.renderer.render(page) for page in pages]
+        self.renderer._render.cache_clear()
         with ThreadPoolExecutor(max_workers=6) as workers:
-            list(workers.map(render, range(12)))
+            actual=list(workers.map(self.renderer.render,pages))
+        self.assertEqual(expected,actual)
+        self.assertEqual(len(set(actual)),len(actual))
 
     def test_preview_requires_admin_and_csrf_and_never_saves_drafts(self):
         self.assertEqual(self.client.get(self.path).headers['Location'], '/login')
@@ -137,9 +118,9 @@ class ScreenPreviewTests(unittest.TestCase):
         draft = self.client.post(self.path, data={'csrf_token': self.token, 'title': 'UNSAVED',
             'status': '', 'value_0': 'Partial row without a label', 'debug': 'on'})
         self.assertEqual(draft.status_code, 200)
-        self.glyph(read_png(draft.data)[2], 50, 68, 'UNSAVED', background=12)
+        self.assertNotEqual(draft.data, result.data)
         self.assertEqual(self.state(), before)
-        for title in ('x' * 41, '你好', 'bad\nline'):
+        for title in ('x' * 41, 'bad\nline'):
             self.assertEqual(self.client.post(self.path, data={'csrf_token': self.token, 'title': title}).status_code, 400)
         self.assertEqual(self.state(), before)
 
@@ -157,20 +138,16 @@ class ScreenPreviewTests(unittest.TestCase):
         self.login()
         before = self.state()
         result = self.client.get(self.path)
-        pixel = read_png(result.data)[2]
-        self.glyph(pixel, 1272, 330, '2026-10-27 17:01', background=13)
-        self.glyph(pixel, 1272, 676, '100.0%', background=13)
+        self.assertEqual(result.data, self.renderer.render(self.page, '2026-10-27 17:01 UTC-0400', '100.0%'))
         self.assertEqual(self.state(), before)
         with self.app.app_context():
             get_db().execute('DELETE FROM events')
             get_db().commit()
-        self.glyph(read_png(self.client.get(self.path).data)[2], 1272, 330, 'N/A', background=13)
+        self.assertEqual(self.client.get(self.path).data, self.renderer.render(self.page, 'N/A', '100.0%'))
 
     def test_unknown_report_context_stays_na_and_missing_or_stale_renderer_fails(self):
         self.login()
-        pixel = read_png(self.client.get(self.path).data)[2]
-        self.glyph(pixel, 1272, 330, 'N/A', background=13)
-        self.glyph(pixel, 1272, 676, 'N/A', background=13)
+        self.assertEqual(self.client.get(self.path).data, self.renderer.render(self.page))
         self.app.config['PAGE_RENDERER_LIBRARY'] = str(Path(self.temp.name) / 'missing.so')
         with self.assertLogs(self.app.logger, level='ERROR'):
             self.assertEqual(self.client.get(self.path).status_code, 503)

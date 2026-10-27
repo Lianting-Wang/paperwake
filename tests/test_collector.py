@@ -37,7 +37,10 @@ class CollectorTests(unittest.TestCase):
                 raise value
             return validator(value) if validator is not None else value
         def command(argv, *args, **kwargs):
-            return pisched.Result(0,wifi) if argv[0] == 'iwconfig' else pisched.Result(display_rc,'rendered')
+            if argv[0] == 'iwconfig':
+                return pisched.Result(0,wifi)
+            self.render_document=json.loads(Path(kwargs['env']['PISCHED_PAGE_FILE']).read_text())
+            return pisched.Result(display_rc,'rendered')
         with patch.object(c, 'PiSugarClient') as client, patch.object(c, 'run_command') as run, \
              patch.object(c.time, 'sleep'), patch.dict(os.environ, env):
             client.return_value.get.side_effect = get
@@ -51,9 +54,11 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(code,0)
         self.assertEqual(state['values']['http_latency_ms'],12.5)
         env = commands[-1].kwargs['env']
-        self.assertEqual(env['PISCHED_BATTERY'],'55.0')
-        self.assertEqual(env['PISCHED_PAGE_TITLE'],'MY PAPER')
-        self.assertEqual(env['PISCHED_PAGE_VALUE_1'],'Server content')
+        self.assertEqual(self.render_document['battery'],'55.0%')
+        self.assertEqual(self.render_document['title'],'MY PAPER')
+        self.assertEqual(self.render_document['rows'][0]['value'],'Server content')
+        self.assertFalse(Path(env['PISCHED_PAGE_FILE']).exists())
+        self.assertEqual(state['layout_id'],'editorial')
         self.assertNotIn('PISCHED_PAGE_LABEL_6',env)
         self.assertTrue(state['timestamp'].endswith('+00:00'))
         self.assertFalse(list(Path(self.temp.name).glob('*.csv')))
@@ -69,7 +74,7 @@ class CollectorTests(unittest.TestCase):
     def test_battery_error_is_missing_value(self):
         _,state,commands = self.run_case(battery_error=True)
         self.assertIsNone(state['values']['battery_percent'])
-        self.assertEqual(commands[-1].kwargs['env']['PISCHED_BATTERY'],'')
+        self.assertEqual(self.render_document['battery'],'N/A')
 
     def test_display_failure_propagates(self):
         code,state,commands = self.run_case(display_rc=7)
@@ -140,7 +145,7 @@ class CollectorTests(unittest.TestCase):
         self.assertIsNone(state['values']['battery_percent'])
         self.assertEqual(state['values']['battery_voltage'],3.7)
         self.assertEqual(len(sockets),7)
-        self.assertEqual(commands[-1].kwargs['env']['PISCHED_BATTERY'],'')
+        self.assertIn('PISCHED_PAGE_FILE',commands[-1].kwargs['env'])
 
     def test_transient_wifi_command_and_missing_signal_recover(self):
         results = [pisched.Result(1,'not ready'),pisched.Result(0,''),

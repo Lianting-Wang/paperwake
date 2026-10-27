@@ -7,13 +7,16 @@ import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 import time
+from zoneinfo import ZoneInfo
 
 source_modules = Path(__file__).resolve().parents[1] / 'scheduler'
 if source_modules.is_dir():
     sys.path.insert(0, str(source_modules))
 from pisched import Budget, PiSugarClient, atomic_json, run_command, validate_config, rotate_log
 from server_client import validate_display
+from display_model import default_layout
 
 
 def numeric(value, low, high):
@@ -99,18 +102,27 @@ def collect(cfg, event_id):
     log_dir = Path(cfg['log_file']).parent
     try:
         page = validate_display(json.loads(os.environ['PISCHED_PAGE']))
-        # Clear inherited row variables; the server supplies this entire page.
+        # One bounded UTF-8 document carries the same layout/content as preview.
         env = {key: value for key, value in os.environ.items() if not key.startswith('PISCHED_PAGE_')}
-        env.update(PISCHED_BATTERY='' if values['battery_percent'] is None else str(values['battery_percent']),
-                   PISCHED_PAGE_TITLE=page['title'], PISCHED_PAGE_STATUS=page['status'], TZ=cfg['timezone'])
-        for index, row in enumerate(page['rows'], 1):
-            env[f'PISCHED_PAGE_LABEL_{index}'] = row['label']
-            env[f'PISCHED_PAGE_VALUE_{index}'] = row['value']
+        clock = datetime.now(ZoneInfo(cfg['timezone'])).strftime('%Y-%m-%d %H:%M UTC%z')
+        if os.environ.get('PISCHED_TIME_TRUSTED') == '0':
+            clock = 'N/A'
+        document = dict(page, layout=page.get('layout', default_layout()), clock=clock,
+                        battery='N/A' if values['battery_percent'] is None else f"{values['battery_percent']:.1f}%")
+        env.update(TZ=cfg['timezone'], PISCHED_FONT_DIR=str(Path(cfg['display']['path']).parent / 'assets/fonts'))
         display_seconds = min(cfg['display']['timeout_sec'], budget.remaining())
         if display_seconds <= 1:
             raise TimeoutError('Display execution budget exhausted')
-        result = run_command([cfg['display']['path']], display_seconds, env=env)
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', prefix='epaper-', suffix='.json') as page_file:
+            json.dump(document, page_file, ensure_ascii=False, separators=(',', ':'))
+            page_file.flush()
+            env['PISCHED_PAGE_FILE'] = page_file.name
+            result = run_command([cfg['display']['path']], display_seconds, env=env)
         data['display_returncode'] = result.returncode
+        if result.returncode == 0:
+            data['applied_content_version'] = int(os.environ.get('PISCHED_CONTENT_VERSION', '0'))
+            data['layout_id'] = document['layout']['id']
+            data['layout_revision'] = document['layout']['revision']
         if result.returncode:
             fail('display', f'exit status {result.returncode}')
         try:

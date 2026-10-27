@@ -41,8 +41,6 @@ static void Handler(int signo)
 
 int main(void)
 {
-    UWORD panel_width;
-    UWORD panel_height;
     UDOUBLE target_memory_addr;
     bool four_byte_align;
     int result;
@@ -67,8 +65,6 @@ int main(void)
         return -1;
     }
 
-    panel_width = Dev_Info.Panel_W;
-    panel_height = Dev_Info.Panel_H;
     target_memory_addr = Dev_Info.Memory_Addr_L | (Dev_Info.Memory_Addr_H << 16);
     memcpy(lut_version, Dev_Info.LUT_Version, sizeof(Dev_Info.LUT_Version));
     lut_version[sizeof(Dev_Info.LUT_Version)] = 0;
@@ -76,9 +72,7 @@ int main(void)
 
     Debug("A2 Mode:%d\r\n", A2_Mode);
 
-    EPD_IT8951_Clear_Refresh(Dev_Info, target_memory_addr, INIT_Mode);
-
-    result = EPD_IT8951_HasError() ? 1 : SinglePage_Show(panel_width, panel_height, target_memory_addr, four_byte_align, DISPLAY_MODE);
+    result = EPD_IT8951_HasError() ? 1 : SinglePage_Show(Dev_Info, target_memory_addr, four_byte_align, DISPLAY_MODE);
     if(result != 0) {
         Debug("Single page render failed\r\n");
     }

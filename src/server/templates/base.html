@@ -16,7 +16,7 @@
 </header>
 {% if session.get('admin') and active_tab %}
 <nav class="device-nav" aria-label="{{ t('设备管理导航') }}">
-  {% for key, endpoint, label in [('overview', 'dashboard', '设备概览'), ('content', 'settings', '编辑内容'), ('wake', 'wake_settings', '唤醒计划'), ('history', 'history', '报告历史')] %}
+  {% for key, endpoint, label in [('overview', 'dashboard', '设备概览'), ('content', 'settings', '编辑内容'), ('layouts', 'layout_editor', '版式'), ('wake', 'wake_settings', '唤醒计划'), ('history', 'history', '报告历史')] %}
   <a href="{{ url_for(endpoint) if key == 'overview' else url_for(endpoint, device_id=navigation_device_id) }}"{% if active_tab == key %} aria-current="page"{% endif %}>{{ t(label) }}</a>
   {% endfor %}
 </nav>

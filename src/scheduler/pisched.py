@@ -671,6 +671,7 @@ def run_cycle(cfg, initial_error=None):
                     task_seconds = min(cfg['task']['timeout_sec'], max(0, work.remaining() - ALARM_RESERVE_SECONDS))
                     env = dict(os.environ, PISCHED_CONFIG=json.dumps(cfg), PISCHED_EVENT_ID=state['event_id'],
                                PISCHED_PAGE=json.dumps(page), PISCHED_HTTP_LATENCY_MS=str(server.last_latency_ms),
+                               PISCHED_CONTENT_VERSION=str(version), PISCHED_TIME_TRUSTED=str(int(state['time_trusted'])),
                                PISCHED_TASK_BUDGET_SEC=str(task_seconds))
                     rc = run_task(cfg['task']['command'], task_seconds, cfg['log_file'], env)
                     log(f'Task rc={rc}', cfg['log_file'])

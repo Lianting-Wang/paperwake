@@ -24,6 +24,7 @@ from .i18n import LANGUAGE_COOKIE, LANGUAGES, get_language, t
 from .history import build_history_data, cycle_has_failures, merge_cycle
 from .battery import estimate_battery
 from .preview import DEFAULT_LIBRARY, PreviewUnavailable, get_renderer
+from src.scheduler.display_model import builtin_layouts, default_layout
 
 DEFAULT_DISPLAY = {'title': 'E-PAPER', 'status': 'Ready', 'rows': [
     {'label': 'Device', 'value': 'Connected'}, {'label': 'Content', 'value': 'Edit in the control panel'}]}
@@ -102,26 +103,8 @@ def local_day_start(day, zone):
 
 
 def validate_display(value):
-    if not isinstance(value, dict) or set(value) != {'title', 'status', 'rows'}:
-        raise ValueError(t('屏幕内容必须包含标题、状态和信息行。'))
-    def text(key, raw, limit, allow_empty=False):
-        if not isinstance(raw, str) or len(raw) > limit or (not raw and not allow_empty):
-            raise ValueError(t('{field}须包含 {minimum}–{maximum} 个字符。',
-                               field=t(key), minimum=0 if allow_empty else 1, maximum=limit))
-        if any(ord(char) < 32 or ord(char) > 126 for char in raw):
-            raise ValueError(t('{field}仅支持英文、数字和可打印 ASCII 符号。', field=t(key)))
-        return raw
-    rows = value['rows']
-    if not isinstance(rows, list) or len(rows) > 6:
-        raise ValueError(t('最多可设置六条显示信息。'))
-    result = {'title': text('标题', value['title'], 40),
-              'status': text('状态', value['status'], 24), 'rows': []}
-    for row in rows:
-        if not isinstance(row, dict) or set(row) != {'label', 'value'}:
-            raise ValueError(t('每条显示信息都需要名称和内容。'))
-        result['rows'].append({'label': text('名称', row['label'], 20),
-                               'value': text('内容', row['value'], 48, True)})
-    return result
+    from src.scheduler.display_model import validate_display as validate
+    return validate(value)
 
 
 def get_db():
@@ -150,7 +133,7 @@ def create_app(config=None):
     @app.context_processor
     def language_context():
         tabs = {'dashboard': 'overview', 'settings': 'content', 'wake_settings': 'wake',
-                'history': 'history', 'history_manage': 'history'}
+                'history': 'history', 'history_manage': 'history', 'layout_editor': 'layouts'}
         return {'ui_language': get_language(), 'active_tab': tabs.get(request.endpoint),
                 'navigation_device_id': (request.view_args or {}).get('device_id', app.config['DEVICE_ID'])}
     app.config.from_mapping(
@@ -197,7 +180,7 @@ def create_app(config=None):
                 debug INTEGER NOT NULL DEFAULT 0, content_version INTEGER NOT NULL DEFAULT 1,
                 display_json TEXT NOT NULL, latest_event_id TEXT, last_seen_at TEXT,
                 latest_payload TEXT, latest_report_at TEXT, retention_days INTEGER,
-                wake_policy_json TEXT, wake_policy_version INTEGER NOT NULL DEFAULT 1
+                wake_policy_json TEXT, wake_policy_version INTEGER NOT NULL DEFAULT 1, active_layout_json TEXT
             );
             CREATE TABLE IF NOT EXISTS events (
                 device_id TEXT NOT NULL REFERENCES devices(device_id), event_id TEXT NOT NULL,
@@ -211,6 +194,11 @@ def create_app(config=None):
             );
             INSERT OR IGNORE INTO event_keys SELECT device_id,event_id,phase FROM events;
             CREATE INDEX IF NOT EXISTS events_device_received ON events(device_id,received_at);
+            CREATE TABLE IF NOT EXISTS layouts (
+                device_id TEXT NOT NULL REFERENCES devices(device_id), id TEXT NOT NULL,
+                name TEXT NOT NULL, revision INTEGER NOT NULL, builtin INTEGER NOT NULL,
+                document_json TEXT NOT NULL, PRIMARY KEY(device_id,id)
+            );
         ''')
         # Multiple Gunicorn workers can start against the same existing database.
         # Acquire the schema-write lock before checking whether the column exists.
@@ -222,9 +210,16 @@ def create_app(config=None):
             db.execute('ALTER TABLE devices ADD COLUMN wake_policy_json TEXT')
         if 'wake_policy_version' not in columns:
             db.execute('ALTER TABLE devices ADD COLUMN wake_policy_version INTEGER NOT NULL DEFAULT 1')
-        db.execute('''INSERT INTO devices(device_id,token_hash,display_json) VALUES(?,?,?)
+        if 'active_layout_json' not in columns:
+            db.execute('ALTER TABLE devices ADD COLUMN active_layout_json TEXT')
+        db.execute('''INSERT INTO devices(device_id,token_hash,display_json,active_layout_json) VALUES(?,?,?,?)
                       ON CONFLICT(device_id) DO UPDATE SET token_hash=excluded.token_hash''',
-                   (app.config['DEVICE_ID'], token_hash(app.config['DEVICE_TOKEN']), json.dumps(DEFAULT_DISPLAY)))
+                   (app.config['DEVICE_ID'], token_hash(app.config['DEVICE_TOKEN']), json.dumps(DEFAULT_DISPLAY), json.dumps(default_layout())))
+        db.execute('UPDATE devices SET active_layout_json=?,content_version=content_version+1 WHERE active_layout_json IS NULL',
+                   (json.dumps(default_layout()),))
+        for layout_name, layout in builtin_layouts():
+            db.execute('INSERT OR IGNORE INTO layouts VALUES(?,?,?,?,?,?)',
+                       (app.config['DEVICE_ID'], layout['id'], layout_name, 1, 1, json.dumps(layout)))
         db.commit()
 
     def now():
@@ -242,7 +237,7 @@ def create_app(config=None):
             return None
         if request.method == 'POST' and not request.path.startswith('/api/'):
             expected = session.get('csrf', '')
-            supplied = request.form.get('csrf_token', '')
+            supplied = request.headers.get('X-CSRF-Token') or request.form.get('csrf_token', '')
             if not expected or not hmac.compare_digest(expected.encode(), supplied.encode()):
                 abort(400, '表单已失效，请刷新页面后重新提交。')
         # NULL means permanent retention. Policies survive restarts and apply to
@@ -371,7 +366,7 @@ def create_app(config=None):
         db.commit()
         device = db.execute('SELECT * FROM devices WHERE device_id=?', (device['device_id'],)).fetchone()
         reply = dict(debug=bool(device['debug']), content_version=device['content_version'],
-                     display=json.loads(device['display_json']))
+                     display=dict(json.loads(device['display_json']), layout=json.loads(device['active_layout_json'])))
         if device['wake_policy_json'] is not None:
             reply['wake_plan'] = make_wake_plan(json.loads(device['wake_policy_json']), now(),
                                                 version=device['wake_policy_version'])
@@ -474,11 +469,11 @@ def create_app(config=None):
         device = db.execute('SELECT * FROM devices WHERE device_id=?', (device_id,)).fetchone()
         if device is None:
             abort(404)
-        display = json.loads(device['display_json'])
+        display = dict(json.loads(device['display_json']), layout=json.loads(device['active_layout_json']))
         if request.method == 'POST':
             # Drafts may have empty labels/title while typing. Native bounds and
-            # ASCII checks still apply; the save route keeps its stricter rules.
-            display = {'title': request.form.get('title', ''), 'status': request.form.get('status', ''),
+            # UTF-8/bounds checks still apply; saving requires nonempty labels.
+            display = {'layout': json.loads(device['active_layout_json']), 'title': request.form.get('title', ''), 'status': request.form.get('status', ''),
                        'rows': [{'label': request.form.get(f'label_{i}', ''),
                                  'value': request.form.get(f'value_{i}', '')} for i in range(6)
                                 if request.form.get(f'label_{i}') or request.form.get(f'value_{i}')]}
@@ -500,23 +495,30 @@ def create_app(config=None):
         sampled_at = timestamp(metrics.get('timestamp')) or timestamp(payload.get('started_at'))
         if sampled_at and payload.get('time_trusted') is True and isinstance(zone, str):
             try:
-                clock = sampled_at.astimezone(ZoneInfo(zone)).strftime('%Y-%m-%d %H:%M')
+                clock = sampled_at.astimezone(ZoneInfo(zone)).strftime('%Y-%m-%d %H:%M UTC%z')
             except (ZoneInfoNotFoundError, ValueError, OverflowError):
                 pass
         try:
             image = get_renderer(app.config['PAGE_RENDERER_LIBRARY']).render(
                 display, clock, battery_text, width=app.config['PAGE_PREVIEW_WIDTH'])
         except ValueError:
-            abort(400, '预览仅支持显示范围内的英文、数字和可打印 ASCII 符号。')
+            abort(400, '文字超出区域、字体缺字或内容格式无效，请检查内容和版式。')
         except PreviewUnavailable:
             app.logger.exception('Screen preview renderer unavailable')
             abort(503, '屏幕预览暂不可用，请稍后重试。')
         return Response(image, mimetype='image/png')
 
+    from .layouts import register_layout_routes
+    register_layout_routes(app, login_required, csrf_token, now, get_db, get_renderer)
+
     @app.route('/devices/<device_id>/settings', methods=['GET', 'POST'])
     @login_required
     def settings(device_id):
         db = get_db()
+        if request.method == 'POST':
+            # Content must be measured against the same immutable layout that
+            # remains active when this save commits.
+            db.execute('BEGIN IMMEDIATE')
         device = db.execute('SELECT * FROM devices WHERE device_id=?', (device_id,)).fetchone()
         if device is None:
             abort(404)
@@ -533,8 +535,12 @@ def create_app(config=None):
                     display['rows'].append({'label': label, 'value': value})
             try:
                 display = validate_display(display)
-            except ValueError as exc:
-                error = str(exc)
+                issues = get_renderer(app.config['PAGE_RENDERER_LIBRARY']).validate(
+                    dict(display, layout=json.loads(device['active_layout_json'])))
+                if issues:
+                    raise ValueError('文字超出区域或字体缺字，请先调整版式：' + ', '.join(item['element_id'] for item in issues))
+            except (ValueError, PreviewUnavailable) as exc:
+                error = t(str(exc))
             else:
                 changed = display != json.loads(device['display_json'])
                 db.execute('UPDATE devices SET debug=?,display_json=?,content_version=content_version+? WHERE device_id=?',

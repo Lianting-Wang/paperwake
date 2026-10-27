@@ -51,7 +51,7 @@
 
 ## 内容与时间
 
-server 页面为 `{title,status,rows:[{label,value}]}`；标题/状态/名称必须非空，值可为空。只接受可打印 ASCII，长度依次不超过 40/24/20/48，最多六条。保留本地时间和电量，任意中文与图片不在本版范围内。
+server 页面为 `{title,status,rows:[{label,value}]}`；标题/状态/名称必须非空，值可为空。支持 UTF-8 中文、英文和数字，长度按 Unicode 字符依次不超过 40/24/20/48，最多六条；内容值允许换行。控制字符和无效 Unicode 会被拒绝，字体缺字及区域溢出会阻止应用。保留本地更新时间和电量，版式可在管理页选择或拖拽编辑，参见 [版式编辑器](layouts.md)。
 
 ```sh
 make preview CONFIG=config/daytime.example.json
