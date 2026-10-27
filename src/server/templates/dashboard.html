@@ -1,47 +1,64 @@
 {% extends 'base.html' %}
 {% from '_estimate.html' import estimate_panel with context %}
-{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='wake-plan.css', v=asset_version('wake-plan.css')) }}">{% endblock %}
+{% from '_device_ui.html' import icon, screen_preview with context %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='management.css', v=asset_version('management.css')) }}">{% endblock %}
 {% block content %}
-<div class="page-heading">
-  <div><p class="eyebrow">{{ t('设备概览') }}</p><h1>{{ t('电子纸设备管理') }}</h1><p class="muted">{{ t('页面刷新时间') }} <time datetime="{{ now }}">{{ t('需启用 JavaScript 显示本地时间') }}</time> · <a href="{{ url_for('dashboard') }}">{{ t('刷新状态') }}</a></p><p class="timezone-caption">{{ t('浏览器本地时区') }} · <span data-timezone-label>{{ t('需启用 JavaScript 显示本地时间') }}</span></p></div>
-  <span class="pill">{{ t('1 台设备') if devices|length == 1 else t('{count} 台设备', count=devices|length) }}</span>
-</div>
-{% for device in devices %}
-<section class="device panel">
-  <div class="device-heading"><div><span class="eyebrow">{{ t('电子纸设备') }}</span><h2>{{ device.device_id }}</h2></div><span class="badge {{ device.health }}">{{ device.health_label }}</span></div>
-  {% if devices|length > 1 %}<div class="device-shortcuts"><a href="{{ url_for('settings', device_id=device.device_id) }}">{{ t('编辑内容') }}</a><a href="{{ url_for('wake_settings', device_id=device.device_id) }}">{{ t('唤醒计划') }}</a><a href="{{ url_for('history', device_id=device.device_id) }}">{{ t('报告历史') }}</a></div>{% endif %}
-  <div class="device-grid">
-    <div>
-      <div class="screen">
-        <div class="screen-top"><strong>{{ device.display.title }}</strong><span>v{{ device.content_version }}</span></div>
-        <p class="screen-status">{{ device.display.status }}</p>
-        <dl>{% for row in device.display.rows %}<div><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div>{% endfor %}</dl>
-      </div>
-      <p class="caption">{{ t('当前配置预览；设备实际使用的版本和刷新结果见右侧状态。') }}</p>
-    </div>
-    <div class="telemetry"><dl class="facts">
-      <div><dt>{{ t('最近报到') }}</dt><dd>{% if device.last_seen_at %}<time datetime="{{ device.last_seen_at }}">{{ t('需启用 JavaScript 显示本地时间') }}</time>{% else %}{{ t('尚未连接') }}{% endif %}</dd></div>
-      <div><dt>{{ t('电量') }}</dt><dd>{{ device.battery_percent if device.battery_percent is not none else '—' }}{% if device.battery_percent is not none %}%{% endif %}</dd></div>
-      <div><dt>{{ t('Wi-Fi 信号') }}</dt><dd>{{ device.wifi_rssi if device.wifi_rssi is not none else '—' }}{% if device.wifi_rssi is not none %} dBm{% endif %}</dd></div>
-      <div><dt>{{ t('请求耗时') }}</dt><dd>{{ device.payload.get('server', {}).get('latency_ms', '—') }} ms</dd></div>
-      <div><dt>{{ t('屏幕刷新') }}</dt><dd>{{ device.payload|display_result_label }}</dd></div>
-      <div><dt>{{ t('已上报内容版本') }}</dt><dd>{{ device.payload.get('content_version', t('未知')) }}</dd></div>
-      <div><dt>{{ t('唤醒闹钟') }}</dt><dd>{{ t('已确认') if device.payload.get('alarm_confirmed') else t('尚未确认') }}</dd></div>
-      <div><dt>{{ t('下次唤醒') }}</dt><dd>{% if device.expected_next_run %}<time datetime="{{ device.expected_next_run }}">{{ t('需启用 JavaScript 显示本地时间') }}</time>{% else %}{{ t('未知') }}{% endif %}</dd></div>
-      <div><dt>{{ t('远程调试') }}</dt><dd>{{ t('已开启，下次报到生效') if device.debug else t('已关闭，下次报到生效') }}</dd></div>
-      <div><dt>{{ t('电源计划') }}</dt><dd>{{ device.payload.get('shutdown_intent', t('未知'))|ui_label }} <span class="muted">· {{ t('尚未确认实际断电') }}</span></dd></div>
-    </dl></div>
+<div class="management-page">
+  <div class="page-heading management-heading">
+    <div><p class="eyebrow">{{ t('设备概览') }}</p><h1>{{ t('电子纸设备管理') }}</h1><p class="page-description">{{ t('屏幕、连接与下一次唤醒，一眼掌握。') }}</p></div>
+    <a class="subtle-button" href="{{ url_for('dashboard') }}"><span aria-hidden="true">↻</span> {{ t('刷新状态') }}</a>
   </div>
-  {% if device.wake_policy or device.wake_status %}<div class="wake-status"><h3>{{ t('唤醒计划与离线缓存') }}</h3><dl class="facts">
-    <div><dt>{{ t('服务器每日计划') }}</dt><dd>{% if device.wake_policy %}v{{ device.wake_policy_version }} · {{ device.wake_policy.timezone }} · {{ t('每天 {count} 次', count=device.wake_policy.schedule|length) }}{% else %}{{ t('尚未配置') }}{% endif %}</dd></div>
-    <div><dt>{{ t('设备本轮计划来源') }}</dt><dd>{% set source = device.wake_status.get('source') %}{{ t({'server': '服务器下载', 'cache': '本地缓存', 'local': '设备本地计划'}.get(source, '尚未上报')) }}{% if device.wake_status.get('version') %} · v{{ device.wake_status.version }}{% endif %}</dd></div>
-    {% if device.wake_status.get('valid_until') %}<div><dt>{{ t('本轮具体时间覆盖至') }}</dt><dd><time datetime="{{ device.wake_status.valid_until }}">{{ t('需启用 JavaScript 显示本地时间') }}</time></dd></div>{% endif %}
-    {% if device.wake_status.get('occurrence_count') is number %}<div><dt>{{ t('本轮具体时间数量') }}</dt><dd>{{ device.wake_status.occurrence_count }}</dd></div>{% endif %}
-    {% if device.wake_status.get('cached') is boolean %}<div><dt>{{ t('计划本地保存') }}</dt><dd>{{ t('已持久保存') if device.wake_status.cached else t('本轮未持久保存') }}</dd></div>{% endif %}
-  </dl><p class="caption">{{ t('具体时间用完后，设备仍会按缓存的完整每日计划计算。RTC 设置是否成功以本轮闹钟确认状态为准。') }}</p></div>{% endif %}
-  {{ estimate_panel(device.estimate if device.estimate is defined else {}, compact=true) }}
-  {% if device.failures %}<div class="fault-box"><strong>{{ t('设备上报的异常') }}</strong><ul>{% for failure in device.failures %}<li>{% if failure is mapping %}{{ failure.get('stage', t('未知阶段'))|ui_label }} · {{ failure.get('message', failure.get('error', failure)) }}{% else %}{{ failure }}{% endif %}</li>{% endfor %}</ul></div>{% endif %}
-</section>
-{% endfor %}
-<p class="caption">{{ t('管理地址') }}: {{ base_url }} · {{ t('设备状态以报告为依据；“计划休眠”不代表已确认实际断电。') }}</p>
+  {% for device in devices %}
+  <section class="overview-device" aria-label="{{ device.device_id }}">
+    <div class="device-identity"><div class="device-name"><span class="device-symbol">{{ icon('screen') }}</span><div><span class="eyebrow">{{ t('电子纸设备') }}</span><h2>{{ device.device_id }}</h2></div></div><span class="badge {{ device.health }}">{{ device.health_label }}</span></div>
+    {% if devices|length > 1 %}<div class="device-shortcuts"><a href="{{ url_for('settings', device_id=device.device_id) }}">{{ t('编辑内容') }}</a><a href="{{ url_for('wake_settings', device_id=device.device_id) }}">{{ t('唤醒计划') }}</a><a href="{{ url_for('history', device_id=device.device_id) }}">{{ t('报告历史') }}</a></div>{% endif %}
+    {% if device.failures %}<div class="fault-box"><strong>{{ t('设备上报的异常') }}</strong><ul>{% for failure in device.failures %}<li>{% if failure is mapping %}{{ failure.get('stage', t('未知阶段'))|ui_label }} · {{ failure.get('message', failure.get('error', failure)) }}{% else %}{{ failure }}{% endif %}</li>{% endfor %}</ul></div>{% endif %}
+    <dl class="overview-summary">
+      <div class="summary-card"><dt>{{ t('电量') }}</dt><dd>{{ device.battery_percent if device.battery_percent is not none else '—' }}{% if device.battery_percent is not none %}%{% endif %}</dd><dd class="summary-icon" aria-hidden="true">{{ icon('battery') }}</dd><dd class="summary-note">{{ t('电池电压') }} · {{ device['values'].get('battery_voltage') if device['values'].get('battery_voltage') is not none else '—' }}{% if device['values'].get('battery_voltage') is not none %} V{% endif %}</dd></div>
+      <div class="summary-card"><dt>{{ t('Wi-Fi 信号') }}</dt><dd>{{ device.wifi_rssi if device.wifi_rssi is not none else '—' }}{% if device.wifi_rssi is not none %} dBm{% endif %}</dd><dd class="summary-icon" aria-hidden="true">{{ icon('signal') }}</dd><dd class="summary-note">{{ t('请求耗时') }} · {{ device.payload.get('server', {}).get('latency_ms', '—') }} ms</dd></div>
+      <div class="summary-card"><dt>{{ t('下次唤醒') }}</dt><dd class="summary-time">{% if device.expected_next_run %}<time datetime="{{ device.expected_next_run }}">{{ t('需启用 JavaScript 显示本地时间') }}</time>{% else %}{{ t('未知') }}{% endif %}</dd><dd class="summary-icon" aria-hidden="true">{{ icon('clock') }}</dd><dd class="summary-note">{{ t('以设备确认的闹钟为准') }}</dd></div>
+      <div class="summary-card"><dt>{{ t('最近报到') }}</dt><dd class="summary-time">{% if device.last_seen_at %}<time datetime="{{ device.last_seen_at }}">{{ t('需启用 JavaScript 显示本地时间') }}</time>{% else %}{{ t('尚未连接') }}{% endif %}</dd><dd class="summary-icon" aria-hidden="true">{{ icon('check') }}</dd><dd class="summary-note">{{ t('设备最近一次连接服务器') }}</dd></div>
+    </dl>
+    <div class="overview-columns">
+      <section class="panel management-card display-card">
+        <div class="card-heading"><div><p class="eyebrow">{{ t('当前配置') }}</p><h2>{{ t('屏幕显示内容') }}</h2></div><a class="card-link" href="{{ url_for('settings', device_id=device.device_id) }}">{{ t('编辑内容') }} <span aria-hidden="true">↗</span></a></div>
+        <div class="screen-stage">{{ screen_preview(device.display, device.content_version) }}</div>
+        <p class="card-footnote">{{ t('预览显示当前配置，实际刷新结果以设备上报为准。') }}</p>
+      </section>
+      <div class="overview-side">
+      <section class="panel management-card runtime-card">
+        <div class="card-heading"><div><p class="eyebrow">{{ t('本轮运行') }}</p><h2>{{ t('设备运行状态') }}</h2></div><span class="card-symbol">{{ icon('check') }}</span></div>
+        <dl class="runtime-facts">
+          <div><dt>{{ t('屏幕刷新') }}</dt><dd>{{ device.payload|display_result_label }}</dd></div>
+          <div><dt>{{ t('已上报内容版本') }}</dt><dd>{{ device.payload.get('content_version', t('未知')) }}</dd></div>
+          <div><dt>{{ t('唤醒闹钟') }}</dt><dd>{{ t('已确认') if device.payload.get('alarm_confirmed') else t('尚未确认') }}</dd></div>
+          <div><dt>{{ t('远程调试') }}</dt><dd>{{ t('已开启，下次报到生效') if device.debug else t('已关闭，下次报到生效') }}</dd></div>
+          <div><dt>{{ t('电源计划') }}</dt><dd>{{ device.payload.get('shutdown_intent', t('未知'))|ui_label }}</dd></div>
+        </dl>
+        <p class="card-footnote">{{ t('尚未确认实际断电') }}</p>
+        <a class="card-bottom-link" href="{{ url_for('history', device_id=device.device_id) }}">{{ t('查看本轮与历史报告') }} <span aria-hidden="true">→</span></a>
+      </section>
+    {% if device.wake_policy or device.wake_status %}
+    <section class="panel management-card cache-card">
+      <div class="cache-intro"><span class="card-symbol">{{ icon('clock') }}</span><div><p class="eyebrow">{{ t('唤醒计划与离线缓存') }}</p><h2>{% if device.wake_policy %}{{ t('每天 {count} 次', count=device.wake_policy.schedule|length) }}{% else %}{{ t('尚未配置') }}{% endif %}</h2><p class="caption">{% if device.wake_policy %}{{ device.wake_policy.timezone }} · v{{ device.wake_policy_version }}{% endif %}</p></div></div>
+      <div class="cache-detail">
+        <dl class="runtime-facts">
+          <div><dt>{{ t('设备本轮计划来源') }}</dt><dd>{% set source = device.wake_status.get('source') %}{{ t({'server': '服务器下载', 'cache': '本地缓存', 'local': '设备本地计划'}.get(source, '尚未上报')) }}{% if device.wake_status.get('version') %} · v{{ device.wake_status.version }}{% endif %}</dd></div>
+          {% if device.wake_status.get('cached') is boolean %}<div><dt>{{ t('计划本地保存') }}</dt><dd>{{ t('已持久保存') if device.wake_status.cached else t('本轮未持久保存') }}</dd></div>{% endif %}
+        </dl>
+        <details class="helper-details"><summary>{{ t('查看缓存详情') }}</summary><dl class="runtime-facts">
+          {% if device.wake_status.get('valid_until') %}<div><dt>{{ t('本轮具体时间覆盖至') }}</dt><dd><time datetime="{{ device.wake_status.valid_until }}">{{ t('需启用 JavaScript 显示本地时间') }}</time></dd></div>{% endif %}
+          {% if device.wake_status.get('occurrence_count') is number %}<div><dt>{{ t('本轮具体时间数量') }}</dt><dd>{{ device.wake_status.occurrence_count }}</dd></div>{% endif %}
+        </dl><p>{{ t('具体时间用完后，设备仍会按缓存的完整每日计划计算。RTC 设置是否成功以本轮闹钟确认状态为准。') }}</p></details>
+      </div>
+      <a class="card-link" href="{{ url_for('wake_settings', device_id=device.device_id) }}">{{ t('调整计划') }} <span aria-hidden="true">↗</span></a>
+    </section>
+    {% endif %}
+      </div>
+    </div>
+    {{ estimate_panel(device.estimate if device.estimate is defined else {}) }}
+  </section>
+  {% endfor %}
+  <div class="page-metadata"><p>{{ t('页面刷新时间') }} · <time datetime="{{ now }}">{{ t('需启用 JavaScript 显示本地时间') }}</time></p><p>{{ t('浏览器本地时区') }} · <span data-timezone-label>{{ t('需启用 JavaScript 显示本地时间') }}</span></p><p>{{ t('管理地址') }} · {{ base_url }}</p></div>
+</div>
 {% endblock %}

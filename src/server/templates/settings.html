@@ -1,26 +1,46 @@
 {% extends 'base.html' %}
+{% from '_device_ui.html' import icon, screen_preview with context %}
 {% block title %}{{ t('编辑内容') }} · {{ t('电子纸管理') }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='management.css', v=asset_version('management.css')) }}">{% endblock %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">{{ t('内容与调试设置') }}</p><h1>{{ t('设置你的电子纸。') }}</h1><p class="muted">{{ device.device_id }} · {{ t('内容版本') }} {{ device.content_version }}</p></div></div>
-{% if error %}<p role="alert" class="notice error">{{ error }}</p>{% endif %}
-<form method="post" class="settings panel">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <div class="section-heading"><h2>{{ t('屏幕显示内容') }}</h2><p class="muted">{{ t('电子纸目前仅支持英文、数字和可打印 ASCII 符号；未使用的信息行请留空。') }}</p></div>
-  <div class="two-columns">
-    <label>{{ t('标题') }} <span class="muted">{{ t('最多 {count} 个字符', count=40) }}</span><input name="title" value="{{ display.title }}" maxlength="40" required></label>
-    <label>{{ t('状态') }} <span class="muted">{{ t('最多 {count} 个字符', count=24) }}</span><input name="status" value="{{ display.status }}" maxlength="24" required></label>
+<div class="management-page">
+  <div class="page-heading management-heading"><div><p class="eyebrow">{{ t('编辑内容') }}</p><h1>{{ t('设置你的电子纸。') }}</h1><p class="page-description">{{ device.device_id }} <span class="meta-separator">/</span> {{ t('内容版本') }} {{ device.content_version }}</p></div><span class="heading-note"><i aria-hidden="true"></i>{{ t('设备下次报到时生效') }}</span></div>
+  {% if error %}<p role="alert" class="notice error">{{ error }}</p>{% endif %}
+  <div class="editor-layout">
+    <form method="post" class="editor-form" data-content-editor>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <section class="panel management-card editor-section">
+        <div class="card-heading"><div><p class="eyebrow">{{ t('基本信息') }}</p><h2>{{ t('屏幕显示内容') }}</h2></div><span class="section-number" aria-hidden="true">01</span></div>
+        <p class="field-note">{{ t('电子纸目前仅支持英文、数字和可打印 ASCII 符号；未使用的信息行请留空。') }}</p>
+        <div class="editor-fields">
+          <label for="display-title">{{ t('标题') }} <span class="field-limit" aria-label="{{ t('最多 {count} 个字符', count=40) }}">40</span><input id="display-title" name="title" value="{{ display.title }}" maxlength="40" required></label>
+          <label for="display-status">{{ t('状态') }} <span class="field-limit" aria-label="{{ t('最多 {count} 个字符', count=24) }}">24</span><input id="display-status" name="status" value="{{ display.status }}" maxlength="24" required></label>
+        </div>
+      </section>
+      <section class="panel management-card editor-section">
+        <div class="card-heading"><div><p class="eyebrow">{{ t('信息行') }}</p><h2>{{ t('留给重要的信息。') }}</h2></div><span class="section-number" aria-hidden="true">02</span></div>
+        <div class="editor-row-head" aria-hidden="true"><span></span><span>{{ t('名称 · 最多 20 个字符') }}</span><span>{{ t('内容 · 最多 48 个字符') }}</span></div>
+        {% for i in range(6) %}{% set row = display.rows[i] if i < display.rows|length else {} %}
+        <div class="editor-row">
+          <span class="row-number" aria-hidden="true">{{ '%02d'|format(i+1) }}</span>
+          <div><label class="sr-only" for="label_{{ i }}">{{ t('第 {number} 行名称', number=i+1) }}</label><input id="label_{{ i }}" name="label_{{ i }}" value="{{ row.get('label', '') }}" maxlength="20" placeholder="{{ t('名称') }}"></div>
+          <div><label class="sr-only" for="value_{{ i }}">{{ t('第 {number} 行内容', number=i+1) }}</label><input id="value_{{ i }}" name="value_{{ i }}" value="{{ row.get('value', '') }}" maxlength="48" placeholder="{{ t('要展示的信息（英文或数字）') }}"></div>
+        </div>
+        {% endfor %}
+        <p class="field-note row-note">{{ t('最多六行，空白行不会显示在屏幕上。') }}</p>
+      </section>
+      <section class="panel management-card maintenance-card">
+        <div class="maintenance-heading"><div><p class="eyebrow">{{ t('维护选项') }}</p><h2>{{ t('维护时保持开机') }}</h2></div><label class="toggle switch-control"><input type="checkbox" name="debug" {% if debug %}checked{% endif %}><span>{{ t('远程调试') }}</span></label></div>
+        <p class="field-note">{{ t('开启后，设备下次成功报到并完成本轮工作后将保持开机。每轮只获取一次此设置。') }}</p>
+        <details class="helper-details"><summary>{{ t('调试说明') }}</summary><p>{{ t('本地 DEBUG 文件始终允许留机。若本轮无法连接服务器，远程设置不会生效；本轮已取得“开启”后，后续上报失败仍会留机。') }}</p></details>
+      </section>
+      <div class="editor-save-bar"><p>{{ t('修改将在设备下次报到时生效。') }}</p><div class="actions"><a href="{{ url_for('dashboard') }}">{{ t('取消') }}</a><button type="submit" class="primary">{{ t('保存设置') }} <span aria-hidden="true">↗</span></button></div></div>
+    </form>
+    <aside class="editor-preview">
+      <section class="panel management-card preview-card"><div class="card-heading"><div><p class="eyebrow">{{ t('实时预览') }}</p><h2>{{ t('屏幕上的样子') }}</h2></div><span class="card-symbol">{{ icon('screen') }}</span></div><div class="screen-stage">{{ screen_preview(display, device.content_version) }}</div><p class="card-footnote">{{ t('预览随输入更新；保存后将在设备下次报到时生效。') }}</p></section>
+      <div class="quiet-note"><span>{{ icon('check') }}</span><p>{{ t('内容与唤醒计划独立保存，可放心调整。') }}</p></div>
+    </aside>
   </div>
-  <div class="row-heading"><span>{{ t('名称 · 最多 20 个字符') }}</span><span>{{ t('内容 · 最多 48 个字符') }}</span></div>
-  {% for i in range(6) %}{% set row = display.rows[i] if i < display.rows|length else {} %}
-  <div class="two-columns content-row">
-    <label class="sr-only" for="label_{{ i }}">{{ t('第 {number} 行名称', number=i+1) }}</label>
-    <input id="label_{{ i }}" name="label_{{ i }}" value="{{ row.get('label', '') }}" maxlength="20" placeholder="{{ t('第 {number} 行名称', number=i+1) }}">
-    <label class="sr-only" for="value_{{ i }}">{{ t('第 {number} 行内容', number=i+1) }}</label>
-    <input id="value_{{ i }}" name="value_{{ i }}" value="{{ row.get('value', '') }}" maxlength="48" placeholder="{{ t('要展示的信息（英文或数字）') }}">
-  </div>
-  {% endfor %}
-  <div class="debug-setting"><div><h2>{{ t('维护时保持开机') }}</h2><p class="muted">{{ t('开启后，设备下次成功报到并完成本轮工作后将保持开机。每轮只获取一次此设置。') }}</p></div><label class="toggle"><input type="checkbox" name="debug" {% if debug %}checked{% endif %}><span>{{ t('远程调试') }}</span></label></div>
-  <p class="caption">{{ t('本地 DEBUG 文件始终允许留机。若本轮无法连接服务器，远程设置不会生效；本轮已取得“开启”后，后续上报失败仍会留机。') }}</p>
-  <div class="actions"><button class="primary">{{ t('保存设置') }} <span>↗</span></button><a href="{{ url_for('dashboard') }}">{{ t('取消') }}</a></div>
-</form>
+</div>
 {% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='content-preview.js', v=asset_version('content-preview.js')) }}" defer></script>{% endblock %}
