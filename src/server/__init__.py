@@ -148,7 +148,10 @@ def create_app(config=None):
 
     @app.context_processor
     def language_context():
-        return {'ui_language': get_language()}
+        tabs = {'dashboard': 'overview', 'settings': 'content', 'wake_settings': 'wake',
+                'history': 'history', 'history_manage': 'history'}
+        return {'ui_language': get_language(), 'active_tab': tabs.get(request.endpoint),
+                'navigation_device_id': (request.view_args or {}).get('device_id', app.config['DEVICE_ID'])}
     app.config.from_mapping(
         DATABASE=os.environ.get('DATABASE', 'data/runtime/server.sqlite3'),
         SECRET_KEY=os.environ.get('SECRET_KEY', ''),
@@ -471,11 +474,40 @@ def create_app(config=None):
         display = json.loads(device['display_json'])
         debug = bool(device['debug'])
         error = None
+        if request.method == 'POST':
+            debug = request.form.get('debug') == 'on'
+            display = {'title': request.form.get('title', ''), 'status': request.form.get('status', ''), 'rows': []}
+            for i in range(6):
+                label = request.form.get(f'label_{i}', '')
+                value = request.form.get(f'value_{i}', '')
+                if label or value:
+                    display['rows'].append({'label': label, 'value': value})
+            try:
+                display = validate_display(display)
+            except ValueError as exc:
+                error = str(exc)
+            else:
+                changed = display != json.loads(device['display_json'])
+                db.execute('UPDATE devices SET debug=?,display_json=?,content_version=content_version+? WHERE device_id=?',
+                           (int(debug), json.dumps(display), int(changed), device_id))
+                db.commit()
+                flash('设置已保存，将在设备下次报到时生效。', 'success')
+                return redirect(url_for('settings', device_id=device_id))
+        return render_template('settings.html', device=device, display=display, debug=debug,
+                               error=error), 400 if error else 200
+
+    @app.route('/devices/<device_id>/wake-plan', methods=['GET', 'POST'])
+    @login_required
+    def wake_settings(device_id):
+        db = get_db()
+        device = db.execute('SELECT * FROM devices WHERE device_id=?', (device_id,)).fetchone()
+        if device is None:
+            abort(404)
         wake_policy = json.loads(device['wake_policy_json'] or 'null')
         wake_timezone = wake_policy['timezone'] if wake_policy else ''
         wake_schedule = '\n'.join(wake_policy['schedule']) if wake_policy else ''
         wake_error = None
-        if request.method == 'POST' and request.form.get('action') == 'wake_plan':
+        if request.method == 'POST':
             wake_timezone = request.form.get('wake_timezone', '').strip()
             wake_schedule = request.form.get('wake_schedule', '')
             try:
@@ -501,30 +533,11 @@ def create_app(config=None):
                            (json.dumps(policy), version, device_id))
                 db.commit()
                 flash('唤醒计划已保存，将在设备下次成功报到时下载并缓存。', 'success')
-                return redirect(url_for('settings', device_id=device_id))
-        elif request.method == 'POST':
-            debug = request.form.get('debug') == 'on'
-            display = {'title': request.form.get('title', ''), 'status': request.form.get('status', ''), 'rows': []}
-            for i in range(6):
-                label = request.form.get(f'label_{i}', '')
-                value = request.form.get(f'value_{i}', '')
-                if label or value:
-                    display['rows'].append({'label': label, 'value': value})
-            try:
-                display = validate_display(display)
-            except ValueError as exc:
-                error = str(exc)
-            else:
-                changed = display != json.loads(device['display_json'])
-                db.execute('UPDATE devices SET debug=?,display_json=?,content_version=content_version+? WHERE device_id=?',
-                           (int(debug), json.dumps(display), int(changed), device_id))
-                db.commit()
-                flash('设置已保存，将在设备下次报到时生效。', 'success')
-                return redirect(url_for('dashboard'))
+                return redirect(url_for('wake_settings', device_id=device_id))
         wake_plan = make_wake_plan(wake_policy, now(), device['wake_policy_version']) if wake_policy else None
-        return render_template('settings.html', device=device, display=display, debug=debug, error=error,
+        return render_template('wake_settings.html', device=device,
                                wake_timezone=wake_timezone, wake_schedule=wake_schedule,
-                               wake_plan=wake_plan, wake_error=wake_error), 400 if error or wake_error else 200
+                               wake_plan=wake_plan, wake_error=wake_error), 400 if wake_error else 200
 
     @app.get('/devices/<device_id>/history')
     @login_required

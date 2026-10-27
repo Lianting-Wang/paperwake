@@ -14,6 +14,13 @@
     {% if session.get('admin') %}<form action="{{ url_for('logout') }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="text-button">{{ t('退出登录') }}</button></form>{% endif %}
   </div>
 </header>
+{% if session.get('admin') and active_tab %}
+<nav class="device-nav" aria-label="{{ t('设备管理导航') }}">
+  {% for key, endpoint, label in [('overview', 'dashboard', '设备概览'), ('content', 'settings', '编辑内容'), ('wake', 'wake_settings', '唤醒计划'), ('history', 'history', '报告历史')] %}
+  <a href="{{ url_for(endpoint) if key == 'overview' else url_for(endpoint, device_id=navigation_device_id) }}"{% if active_tab == key %} aria-current="page"{% endif %}>{{ t(label) }}</a>
+  {% endfor %}
+</nav>
+{% endif %}
 {% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<p role="status" class="notice {{ category }}">{{ t(message) }}</p>{% endfor %}{% endwith %}
 <main>{% block content %}{% endblock %}</main>
 <footer>{{ t('电子纸设备管理') }} <span>{{ t('修改将在设备下次报到时生效。') }}</span></footer>

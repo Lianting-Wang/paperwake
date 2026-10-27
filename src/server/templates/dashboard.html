@@ -9,6 +9,7 @@
 {% for device in devices %}
 <section class="device panel">
   <div class="device-heading"><div><span class="eyebrow">{{ t('电子纸设备') }}</span><h2>{{ device.device_id }}</h2></div><span class="badge {{ device.health }}">{{ device.health_label }}</span></div>
+  {% if devices|length > 1 %}<div class="device-shortcuts"><a href="{{ url_for('settings', device_id=device.device_id) }}">{{ t('编辑内容') }}</a><a href="{{ url_for('wake_settings', device_id=device.device_id) }}">{{ t('唤醒计划') }}</a><a href="{{ url_for('history', device_id=device.device_id) }}">{{ t('报告历史') }}</a></div>{% endif %}
   <div class="device-grid">
     <div>
       <div class="screen">
@@ -40,7 +41,6 @@
   </dl><p class="caption">{{ t('具体时间用完后，设备仍会按缓存的完整每日计划计算。RTC 设置是否成功以本轮闹钟确认状态为准。') }}</p></div>{% endif %}
   {{ estimate_panel(device.estimate if device.estimate is defined else {}, compact=true) }}
   {% if device.failures %}<div class="fault-box"><strong>{{ t('设备上报的异常') }}</strong><ul>{% for failure in device.failures %}<li>{% if failure is mapping %}{{ failure.get('stage', t('未知阶段'))|ui_label }} · {{ failure.get('message', failure.get('error', failure)) }}{% else %}{{ failure }}{% endif %}</li>{% endfor %}</ul></div>{% endif %}
-  <div class="actions"><a class="primary" href="{{ url_for('settings', device_id=device.device_id) }}">{{ t('编辑内容与唤醒计划') }} <span>↗</span></a><a href="{{ url_for('history', device_id=device.device_id) }}">{{ t('查看报告历史') }} →</a></div>
 </section>
 {% endfor %}
 <p class="caption">{{ t('管理地址') }}: {{ base_url }} · {{ t('设备状态以报告为依据；“计划休眠”不代表已确认实际断电。') }}</p>

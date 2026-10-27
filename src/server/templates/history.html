@@ -3,7 +3,6 @@
 {% block title %}{{ t('报告历史') }} · {{ t('电子纸管理') }}{% endblock %}
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='history.css', v=asset_version('history.css')) }}">{% endblock %}
 {% block content %}
-<a class="back" href="{{ url_for('dashboard') }}">← {{ t('返回设备概览') }}</a>
 <div class="page-heading history-heading"><div><p class="eyebrow">{{ t('报告历史') }} / {{ t('设备洞察') }}</p><h1>{{ t('看见每一轮变化。') }}</h1><p class="muted">{{ device_id }} · {{ t('浏览器本地时区') }} <span data-timezone-label>{{ t('需启用 JavaScript 显示本地时间') }}</span></p></div><a class="history-anchor" href="#history-storage">{{ t('管理历史数据') }} <span>↗</span></a></div>
 <div id="history-insights" data-url="{{ history_data_url }}" data-language="{{ ui_language }}" data-labels="{{ {
   'loading': t('正在整理历史数据…'), 'loadError': t('历史数据加载失败，请重试。'), 'retry': t('重新加载'),

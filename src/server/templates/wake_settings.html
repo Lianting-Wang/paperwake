@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block title %}{{ t('唤醒计划') }} · {{ t('电子纸管理') }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='wake-plan.css', v=asset_version('wake-plan.css')) }}">{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">{{ t('唤醒计划') }}</p><h1>{{ t('每日唤醒计划') }}</h1><p class="muted">{{ device.device_id }}</p></div></div>
+<section class="settings panel wake-settings">
+  <div class="section-heading"><p class="eyebrow">{{ t('断网后仍可安排唤醒') }}</p><h2>{{ t('每日唤醒计划') }}</h2><p class="muted">{{ t('服务器下发未来 24 小时内的全部时间，且至少五次。设备缓存完整每日计划，断网或缓存时间用完后仍可继续计算下一次唤醒。') }}</p></div>
+  {% if wake_error %}<p role="alert" class="notice error">{{ wake_error }}</p>{% endif %}
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="wake_timezone">{{ t('计划时区（IANA）') }}<input id="wake_timezone" name="wake_timezone" value="{{ wake_timezone }}" maxlength="128" placeholder="America/New_York" required></label>
+    <p class="caption">{{ t('每日 HH:MM 按此时区解释；下方具体日期按浏览器当地时区显示。夏令时不存在的时刻跳过，重复时刻只执行第一次。') }}</p>
+    <label for="wake_schedule">{{ t('每日唤醒时间') }}<textarea id="wake_schedule" name="wake_schedule" rows="5" maxlength="10080" placeholder="08:00&#10;12:00&#10;16:00&#10;18:00" required>{{ wake_schedule }}</textarea></label>
+    <p class="caption">{{ t('使用 24 小时 HH:MM 格式，以换行、空格或逗号分隔。保存此表不会修改屏幕内容或远程调试开关。') }}</p>
+    <div class="actions"><button class="primary">{{ t('保存唤醒计划') }} <span>↗</span></button></div>
+  </form>
+  {% if wake_plan %}
+  <div class="wake-preview"><div class="wake-preview-heading"><strong>{{ t('接下来五次唤醒') }}</strong><span class="pill">v{{ wake_plan.version }} · {{ t('每天 {count} 次', count=wake_plan.schedule|length) }}</span></div><p class="timezone-caption">{{ t('浏览器本地时区') }} · <span data-timezone-label>{{ t('需启用 JavaScript 显示本地时间') }}</span></p><ol>{% for occurrence in wake_plan.occurrences[:5] %}<li><time datetime="{{ occurrence }}">{{ t('需启用 JavaScript 显示本地时间') }}</time></li>{% endfor %}</ol><p class="caption">{{ t('本次可下载 {count} 个未来时间，覆盖至', count=wake_plan.occurrences|length) }} <time datetime="{{ wake_plan.occurrences[-1] }}">{{ t('需启用 JavaScript 显示本地时间') }}</time></p></div>
+  {% else %}<p class="caption">{{ t('尚未配置。升级后的设备首次报到时，会以设备当前完整每日时间表初始化；之后以此页面保存的计划为准。') }}</p>{% endif %}
+  <p class="caption">{{ t('此处展示可下载的计划，并不代表设备已设置 RTC。实际闹钟与缓存状态请查看设备概览；PiSugar 故障仍可能导致无法唤醒。') }}</p>
+</section>
+{% endblock %}

@@ -344,10 +344,56 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(get_db().execute("SELECT COUNT(*) FROM events WHERE phase='final'").fetchone()[0], 1)
 
     def save_wake_policy(self, **updates):
-        fields = {'action': 'wake_plan', 'wake_timezone': 'America/New_York', 'wake_schedule': '08:00\n12:00\n18:00',
-                  'csrf_token': self.csrf('/devices/test-screen/settings')}
+        fields = {'wake_timezone': 'America/New_York', 'wake_schedule': '08:00\n12:00\n18:00',
+                  'csrf_token': self.csrf('/devices/test-screen/wake-plan')}
         fields.update(updates)
-        return self.client.post('/devices/test-screen/settings', data=fields)
+        return self.client.post('/devices/test-screen/wake-plan', data=fields)
+
+    def test_top_navigation_separates_content_wake_schedule_and_history(self):
+        self.assertNotIn(b'class="device-nav"', self.client.get('/login').data)
+        self.assertEqual(self.client.get('/devices/test-screen/wake-plan').headers['Location'], '/login')
+        self.login()
+        pages = [('/', '设备概览'), ('/devices/test-screen/settings', '编辑内容'),
+                 ('/devices/test-screen/wake-plan', '唤醒计划'), ('/devices/test-screen/history', '报告历史')]
+        for language in ('zh', 'en'):
+            self.switch_language(language)
+            for path, label in pages:
+                with self.subTest(language=language, path=path):
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 200)
+                    html = response.data.decode()
+                    navigation = re.search(r'<nav class="device-nav".*?</nav>', html, re.S)[0]
+                    self.assertLess(html.index(navigation), html.index('<main>'))
+                    self.assertEqual(navigation.count('aria-current="page"'), 1)
+                    for destination, _label in pages:
+                        self.assertIn(f'href="{destination}"', navigation)
+                    self.assertIn(f'href="{path}" aria-current="page"', navigation)
+                    if language == 'zh':
+                        self.assertIn(f'aria-current="page">{label}</a>', navigation)
+        content = self.client.get('/devices/test-screen/settings').data
+        wake = self.client.get('/devices/test-screen/wake-plan').data
+        self.assertIn(b'name="title"', content)
+        self.assertNotIn(b'name="wake_schedule"', content)
+        self.assertIn(b'name="wake_schedule"', wake)
+        self.assertNotIn(b'name="title"', wake)
+        self.assertNotIn(b'name="debug"', wake)
+        self.assertEqual(self.client.get('/devices/missing/wake-plan').status_code, 404)
+
+    def test_saves_and_validation_stay_on_their_respective_pages(self):
+        self.login()
+        self.assertEqual(self.settings().headers['Location'], '/devices/test-screen/settings')
+        self.assertEqual(self.save_wake_policy().headers['Location'], '/devices/test-screen/wake-plan')
+        invalid_content = self.settings(title='你好', debug='on')
+        self.assertEqual(invalid_content.status_code, 400)
+        self.assertIn('value="你好"'.encode(), invalid_content.data)
+        self.assertIn(b'name="debug" checked', invalid_content.data)
+        self.assertNotIn(b'name="wake_schedule"', invalid_content.data)
+        saved = self.device()
+        invalid_wake = self.save_wake_policy(wake_schedule='25:00')
+        self.assertEqual(invalid_wake.status_code, 400)
+        self.assertIn(b'>25:00</textarea>', invalid_wake.data)
+        self.assertNotIn(b'name="title"', invalid_wake.data)
+        self.assertEqual(self.device()['wake_policy_json'], saved['wake_policy_json'])
 
     def test_wake_plan_seeds_once_and_is_returned_to_old_devices_after_seeding(self):
         self.assertNotIn('wake_plan', self.check_in().json)
@@ -395,8 +441,8 @@ class ServerTests(unittest.TestCase):
         self.assertIn('本地缓存'.encode(), dashboard)
         self.assertIn('已持久保存'.encode(), dashboard)
         self.assertIn(b'<time datetime="' + downloaded['occurrences'][-1].encode(), dashboard)
-        self.switch_language('en', '/devices/test-screen/settings')
-        settings = self.client.get('/devices/test-screen/settings').data
+        self.switch_language('en', '/devices/test-screen/wake-plan')
+        settings = self.client.get('/devices/test-screen/wake-plan').data
         self.assertIn(b'Daily wake schedule', settings)
         self.assertIn(b'name="wake_timezone" value="Europe/London"', settings)
         self.assertIn(b'Next five wakes', settings)
@@ -409,8 +455,8 @@ class ServerTests(unittest.TestCase):
                 self.assertIsNone(self.device()['wake_policy_json'])
                 self.assertIsNone(self.device()['latest_event_id'])
         self.login()
-        self.assertEqual(self.client.post('/devices/test-screen/settings', data={
-            'action': 'wake_plan', 'wake_timezone': 'UTC', 'wake_schedule': '08:00'}).status_code, 400)
+        self.assertEqual(self.client.post('/devices/test-screen/wake-plan', data={
+            'wake_timezone': 'UTC', 'wake_schedule': '08:00'}).status_code, 400)
         for changes in ({'wake_timezone': 'unknown/zone'}, {'wake_schedule': ''},
                         {'wake_schedule': '08:00,08:00'}, {'wake_schedule': '8:00'}):
             with self.subTest(changes=changes):

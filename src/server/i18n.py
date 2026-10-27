@@ -21,8 +21,8 @@ ENGLISH = {
     '远程调试': 'Remote debug', '已开启，下次报到生效': 'Enabled for the next check-in',
     '已关闭，下次报到生效': 'Disabled for the next check-in', '电源计划': 'Power intent',
     '尚未确认实际断电': 'Actual power-off is not confirmed', '设备上报的异常': 'Reported failures',
-    '未知阶段': 'Unknown stage', '编辑内容与调试': 'Edit content & debug',
-    '查看报告历史': 'View report history', '管理地址': 'Management address',
+    '未知阶段': 'Unknown stage', '编辑内容': 'Edit content', '唤醒计划': 'Wake schedule',
+    '设备管理导航': 'Device management navigation', '管理地址': 'Management address',
     '设备状态以报告为依据；“计划休眠”不代表已确认实际断电。':
         'Device state is based on reports; scheduled sleep does not confirm electrical power-off.',
     '返回设备概览': 'Device overview', '报告历史': 'Report history',
@@ -218,8 +218,6 @@ ENGLISH = {
     '设备本轮计划来源': 'Schedule used this cycle', '服务器下载': 'Downloaded from server',
     '本地缓存': 'Local cache', '设备本地计划': 'Device local schedule', '尚未上报': 'Not reported yet',
     '本轮具体时间覆盖至': 'This cycle’s dated plan through', '本轮具体时间数量': 'Dated occurrences this cycle',
-    '内容、调试与唤醒设置': 'CONTENT, DEBUG & WAKE SETTINGS',
-    '编辑内容与唤醒计划': 'Edit content & wake schedule',
     '计划本地保存': 'Schedule saved locally', '已持久保存': 'Saved to disk',
     '本轮未持久保存': 'Not saved to disk this cycle',
     '具体时间用完后，设备仍会按缓存的完整每日计划计算。RTC 设置是否成功以本轮闹钟确认状态为准。':
