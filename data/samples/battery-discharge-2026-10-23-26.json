@@ -1,0 +1,132 @@
+{
+  "device_id": "epaper-pi-zero2",
+  "timezone": "America/New_York",
+  "source_sha256": "4b9fa496442ff36534c0bbdcc90dd0662b7df47b3a7c32badba57d4779331b89",
+  "csv_sha256": "843a0890ffcbd4fdf562c504c46070a9ef19d44e6a971618b76699a0fc291500",
+  "start_at": "2026-10-23T16:01:00.252348+00:00",
+  "last_success_sample_at": "2026-10-27T01:01:00.577097+00:00",
+  "last_success_report_at": "2026-10-27T01:01:19.506289+00:00",
+  "first_missing_scheduled_wake_at": "2026-10-26T21:30:00-04:00",
+  "terminal_basis": "User confirmed battery exhaustion; operational end bracketed by last successful cycle and its next scheduled wake without a report. Not a measured zero-charge voltage.",
+  "observed_runtime_hours": 81.00009020805557,
+  "runtime_hours_to_first_missing_wake": 81.48326323666666,
+  "schedule_cycles_per_day": 48,
+  "run_count": 163,
+  "valid_percentage_count": 161,
+  "valid_voltage_count": 159,
+  "paired_count": 158,
+  "fault_cycles": 11,
+  "median_scheduler_seconds": 42.326,
+  "total_scheduler_seconds": 7121.361,
+  "fits_on_same_paired_samples": {
+    "battery_voltage_v": {
+      "n": 158,
+      "slope_per_hour": -0.006863806955883822,
+      "intercept": 4.14003505524809,
+      "r_squared": 0.9273526860842112,
+      "rmse": 0.04495077845695504
+    },
+    "battery_percent": {
+      "n": 158,
+      "slope_per_hour": -0.6329482408932744,
+      "intercept": 105.36512452419497,
+      "r_squared": 0.8398534566197366,
+      "rmse": 6.467107320968198
+    }
+  },
+  "voltage_slopes_by_elapsed_segment": {
+    "0-24h": {
+      "n": 47,
+      "mv_per_hour": -11.61165272107163
+    },
+    "24-48h": {
+      "n": 48,
+      "mv_per_hour": -6.938996867159166
+    },
+    "48-60h": {
+      "n": 23,
+      "mv_per_hour": -0.7324676211633346
+    },
+    "60-72h": {
+      "n": 23,
+      "mv_per_hour": -6.129276401096233
+    },
+    "72-82h": {
+      "n": 18,
+      "mv_per_hour": -24.830369192148794
+    }
+  },
+  "old_model_replay_checkpoints": [
+    {
+      "at": "2026-10-24T16:00:58.593998+00:00",
+      "elapsed_hours": 23.99953934722222,
+      "actual_remaining_hours_to_first_miss": 57.48372388944445,
+      "old_status": "ready",
+      "old_remaining_hours": 165.4728,
+      "local_at": "2026-10-24T12:00:58.593998-04:00",
+      "voltage_v": 3.9128659,
+      "reported_percent": 88.6004
+    },
+    {
+      "at": "2026-10-25T16:00:57.914654+00:00",
+      "elapsed_hours": 47.99935064055556,
+      "actual_remaining_hours_to_first_miss": 33.48391259611111,
+      "old_status": "ready",
+      "old_remaining_hours": 128.2896,
+      "local_at": "2026-10-25T12:00:57.914654-04:00",
+      "voltage_v": 3.7872658,
+      "reported_percent": 75.49587
+    },
+    {
+      "at": "2026-10-26T00:00:58.740725+00:00",
+      "elapsed_hours": 55.99958010472222,
+      "actual_remaining_hours_to_first_miss": 25.483683131944446,
+      "old_status": "ready",
+      "old_remaining_hours": 156.0096,
+      "local_at": "2026-10-25T20:00:58.740725-04:00",
+      "voltage_v": 3.7935681,
+      "reported_percent": 76.22818
+    },
+    {
+      "at": "2026-10-26T06:01:00.838000+00:00",
+      "elapsed_hours": 62.000162681111114,
+      "actual_remaining_hours_to_first_miss": 19.483100555555556,
+      "old_status": "ready",
+      "old_remaining_hours": 175.6848,
+      "local_at": "2026-10-26T02:01:00.838000-04:00",
+      "voltage_v": 3.796033,
+      "reported_percent": 76.52396
+    },
+    {
+      "at": "2026-10-26T16:01:08.974512+00:00",
+      "elapsed_hours": 72.00242282333333,
+      "actual_remaining_hours_to_first_miss": 9.480840413333333,
+      "old_status": "ready",
+      "old_remaining_hours": 115.4976,
+      "local_at": "2026-10-26T12:01:08.974512-04:00",
+      "voltage_v": 3.703667,
+      "reported_percent": 65.440025
+    },
+    {
+      "at": "2026-10-26T22:00:58.410585+00:00",
+      "elapsed_hours": 77.99948839916667,
+      "actual_remaining_hours_to_first_miss": 3.4837748375,
+      "old_status": "ready",
+      "old_remaining_hours": 40.3872,
+      "local_at": "2026-10-26T18:00:58.410585-04:00",
+      "voltage_v": 3.5481002,
+      "reported_percent": 40.706074
+    },
+    {
+      "at": "2026-10-27T01:01:00.577097+00:00",
+      "elapsed_hours": 81.00009020805557,
+      "actual_remaining_hours_to_first_miss": 0.4831730286111111,
+      "old_status": "ready",
+      "old_remaining_hours": 14.961599999999999,
+      "local_at": "2026-10-26T21:01:00.577097-04:00",
+      "voltage_v": 3.4774,
+      "reported_percent": 24.036125
+    }
+  ],
+  "calibration_status": "One completed operational discharge; reference calibration only, not independent validation."
+}
