@@ -6,5 +6,12 @@
 !src/
 !src/server/
 !src/server/**
+!src/display/
+!src/display/IT8951/
+!src/display/IT8951/**
+src/display/IT8951/bin/
+src/display/IT8951/epd
+!src/scheduler/
+!src/scheduler/wake_plan.py
 src/server/**/__pycache__/
 src/server/**/*.pyc

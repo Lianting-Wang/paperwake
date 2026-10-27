@@ -22,8 +22,8 @@
     <div class="overview-columns">
       <section class="panel management-card display-card">
         <div class="card-heading"><div><p class="eyebrow">{{ t('当前配置') }}</p><h2>{{ t('屏幕显示内容') }}</h2></div><a class="card-link" href="{{ url_for('settings', device_id=device.device_id) }}">{{ t('编辑内容') }} <span aria-hidden="true">↗</span></a></div>
-        <div class="screen-stage">{{ screen_preview(device.display, device.content_version) }}</div>
-        <p class="card-footnote">{{ t('预览显示当前配置，实际刷新结果以设备上报为准。') }}</p>
+        <div class="screen-stage">{{ screen_preview(device.device_id) }}</div>
+        <p class="card-footnote">{{ t('预览显示当前配置，实际刷新结果以设备上报为准。') }}</p><p class="card-footnote preview-context-note">{{ t('TIME 与 BATTERY 使用最近一次设备报告；这不是屏幕实时截图。') }}</p>
       </section>
       <div class="overview-side">
       <section class="panel management-card runtime-card">
@@ -62,3 +62,5 @@
   <div class="page-metadata"><p>{{ t('页面刷新时间') }} · <time datetime="{{ now }}">{{ t('需启用 JavaScript 显示本地时间') }}</time></p><p>{{ t('浏览器本地时区') }} · <span data-timezone-label>{{ t('需启用 JavaScript 显示本地时间') }}</span></p><p>{{ t('管理地址') }} · {{ base_url }}</p></div>
 </div>
 {% endblock %}
+
+{% block scripts %}<script src="{{ url_for('static', filename='screen-preview.js', v=asset_version('screen-preview.js')) }}" defer></script>{% endblock %}

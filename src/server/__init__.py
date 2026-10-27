@@ -13,7 +13,7 @@ import sqlite3
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash
@@ -23,6 +23,7 @@ from src.scheduler.wake_plan import make_wake_plan, validate_policy
 from .i18n import LANGUAGE_COOKIE, LANGUAGES, get_language, t
 from .history import build_history_data, cycle_has_failures, merge_cycle
 from .battery import estimate_battery
+from .preview import DEFAULT_LIBRARY, PreviewUnavailable, get_renderer
 
 DEFAULT_DISPLAY = {'title': 'E-PAPER', 'status': 'Ready', 'rows': [
     {'label': 'Device', 'value': 'Connected'}, {'label': 'Content', 'value': 'Edit in the control panel'}]}
@@ -161,6 +162,8 @@ def create_app(config=None):
         DEVICE_TOKEN=os.environ.get('DEVICE_TOKEN', ''),
         BASE_URL=os.environ.get('BASE_URL', 'http://192.168.76.109:8088'),
         NOW=utc_now,
+        PAGE_RENDERER_LIBRARY=os.environ.get('PAGE_RENDERER_LIBRARY', str(DEFAULT_LIBRARY)),
+        PAGE_PREVIEW_WIDTH=1872,
         MAX_CONTENT_LENGTH=262144, MAX_FORM_MEMORY_SIZE=65536,
         SESSION_COOKIE_NAME='epaper_admin', SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax', PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
@@ -257,7 +260,7 @@ def create_app(config=None):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Referrer-Policy'] = 'same-origin'
-        response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' blob:; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
         response.headers['Cache-Control'] = 'no-store' if request.endpoint != 'static' else 'public, max-age=3600'
         if app.config['SESSION_COOKIE_SECURE']:
             response.headers['Strict-Transport-Security'] = 'max-age=31536000'
@@ -463,6 +466,52 @@ def create_app(config=None):
             item['wake_status'] = wake if isinstance(wake, dict) else {}
             devices.append(item)
         return render_template('dashboard.html', devices=devices, base_url=app.config['BASE_URL'], now=current.isoformat())
+
+    @app.route('/devices/<device_id>/preview.png', methods=['GET', 'POST'])
+    @login_required
+    def screen_preview(device_id):
+        db = get_db()
+        device = db.execute('SELECT * FROM devices WHERE device_id=?', (device_id,)).fetchone()
+        if device is None:
+            abort(404)
+        display = json.loads(device['display_json'])
+        if request.method == 'POST':
+            # Drafts may have empty labels/title while typing. Native bounds and
+            # ASCII checks still apply; the save route keeps its stricter rules.
+            display = {'title': request.form.get('title', ''), 'status': request.form.get('status', ''),
+                       'rows': [{'label': request.form.get(f'label_{i}', ''),
+                                 'value': request.form.get(f'value_{i}', '')} for i in range(6)
+                                if request.form.get(f'label_{i}') or request.form.get(f'value_{i}')]}
+        payload = json.loads(device['latest_payload'] or '{}')
+        metrics = payload.get('metrics', {})
+        values = metrics.get('values', {})
+        battery = values.get('battery_percent')
+        if battery is None:
+            battery = payload.get('battery_percent')
+        battery_text = f'{battery:.1f}%' if type(battery) in (int, float) and 0 <= battery <= 100 else 'N/A'
+        clock = 'N/A'
+        # The Pi renderer uses the device configuration's TZ, which need not
+        # equal the browser zone or the administrator's edited wake schedule.
+        check_in = db.execute("SELECT payload FROM events WHERE device_id=? AND event_id=? AND phase='check-in'",
+                              (device_id, device['latest_event_id'])).fetchone()
+        context = json.loads(check_in['payload']) if check_in else payload
+        device_schedule = context.get('wake_schedule')
+        zone = device_schedule.get('timezone') if isinstance(device_schedule, dict) else None
+        sampled_at = timestamp(metrics.get('timestamp')) or timestamp(payload.get('started_at'))
+        if sampled_at and payload.get('time_trusted') is True and isinstance(zone, str):
+            try:
+                clock = sampled_at.astimezone(ZoneInfo(zone)).strftime('%Y-%m-%d %H:%M')
+            except (ZoneInfoNotFoundError, ValueError, OverflowError):
+                pass
+        try:
+            image = get_renderer(app.config['PAGE_RENDERER_LIBRARY']).render(
+                display, clock, battery_text, width=app.config['PAGE_PREVIEW_WIDTH'])
+        except ValueError:
+            abort(400, '预览仅支持显示范围内的英文、数字和可打印 ASCII 符号。')
+        except PreviewUnavailable:
+            app.logger.exception('Screen preview renderer unavailable')
+            abort(503, '屏幕预览暂不可用，请稍后重试。')
+        return Response(image, mimetype='image/png')
 
     @app.route('/devices/<device_id>/settings', methods=['GET', 'POST'])
     @login_required

@@ -4,7 +4,11 @@
 
 登录后，页眉下方提供“设备概览 / 编辑内容 / 唤醒计划 / 报告历史”四个标签，滚动页面时固定在顶部。内容与远程调试在 `/devices/<device_id>/settings` 编辑，每日唤醒计划在独立的 `/devices/<device_id>/wake-plan` 页面编辑；保存成功或校验失败均留在对应页面，两种设置独立保存。
 
-概览通过关键指标、屏幕配置预览和运行状态分区呈现设备信息，缓存详情可展开查看。内容编辑提供本地实时预览及六条编号信息行，输入本身不会提交配置；只有点击保存后才会更新设置。唤醒页并列展示每日规则与已保存计划的未来五次时间，修改表单后需保存才能更新计划预览；时区、离线缓存和 RTC 说明收在可展开区域。三页沿用报告历史的配色、卡片和间距，窄屏自动改为单列。
+概览通过关键指标、屏幕配置预览和运行状态分区呈现设备信息，缓存详情可展开查看。内容编辑提供实时预览及六条编号信息行，输入会发送到只读的预览接口，只有点击保存后才会更新设备配置。唤醒页并列展示每日规则与已保存计划的未来五次时间，修改表单后需保存才能更新计划预览；时区、离线缓存和 RTC 说明收在可展开区域。三页沿用报告历史的配色、卡片和间距，窄屏自动改为单列。
+
+屏幕预览采用电子纸实际的灰色标题区、左侧六行信息、右侧 TIME / BATTERY / STATUS 及 PI STATUS 页脚；位图字体、坐标和换行直接来自共用 C 绘图函数，可点击查看原尺寸。TIME 与 BATTERY 使用最近一轮报告中的采样时间和电量，时间按该轮 check-in 上报的设备配置时区显示，不随浏览器或后来编辑的唤醒时区改变；缺少可信时间、设备时区或电量时显示 N/A。它展示当前配置或未保存草稿，不是实体屏幕的实时截图，也不证明设备已应用新内容。
+
+`GET /devices/<device_id>/preview.png` 生成当前配置的 PNG；同一路径的 POST 接收内容表单生成草稿 PNG。两者均需要管理员会话，POST 还需要 CSRF，均不保存草稿、不递增内容版本、不切换 debug，也不调用设备。输入停顿 200 ms 后更新，过期请求会被取消，失败时保留上一张有效预览并显示提示。PNG 响应不缓存到浏览器；没有 JavaScript 时仍可查看已保存配置的预览。
 
 ## 本机运行
 
@@ -13,6 +17,7 @@
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r src/server/requirements.txt
+make build-preview
 cp config/server.env.example config/server.local.env
 .venv/bin/python -m src.server hash-password
 python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
@@ -29,6 +34,8 @@ DATABASE=data/runtime/server.sqlite3 .venv/bin/gunicorn --bind 0.0.0.0:8088 --wo
 
 浏览器打开本机地址登录。防火墙需允许树莓派访问 TCP 8088。该进程必须保持运行；主机休眠或退出进程会被设备视为 server 不可达。局域网 HTTP 用于本机测试，不提供传输加密。
 
+本机需要 C 编译器构建预览库。修改 `page_render.c`、相关头文件或字库后，重新执行 `make build-preview` 并重启管理服务；默认预览尺寸为 1872×1404，使用 32 像素传输对齐的设备可在 app 配置中将 `PAGE_PREVIEW_WIDTH` 设为 1856。预览库路径可用 `PAGE_RENDERER_LIBRARY` 指定。源码与已编译库不一致或库缺失时，预览返回 503，不使用另一套过时版式。
+
 ## Docker / NAS 迁移
 
 ```sh
@@ -37,6 +44,8 @@ docker compose -f compose.server.yaml logs --tail 50 epaper-server
 ```
 
 容器使用 Gunicorn，并将 SQLite 数据保存在命名卷 `epaper-server-data` 的 `/data/server.sqlite3`。不要用 `down -v` 删除需要保留的数据。默认发布到主机所有网卡的 8088；可通过 `SERVER_BIND`、`SERVER_PORT` 改变绑定。迁移时停止旧服务，备份并恢复整个数据卷，再在新主机启动；SQLite WAL 和 SHM 文件应与数据库一起处理，或在停机后确认已 checkpoint。服务器启动不会重置 debug、展示内容或历史；`DEVICE_TOKEN` 修改会更新该设备认证。
+
+Docker 构建阶段会编译本机架构的共用绘图库，运行镜像保留源码与字库校验，但不安装编译器或 GPIO/SPI 依赖。后续电子纸风格调整应修改共用绘图文件，并同时构建设备程序和重新构建本服务镜像，网页无需再单独调整屏幕 CSS。
 
 迁移 NAS 时将设备地址改为 NAS 局域网 IP（例如 `http://192.168.76.71:8088`），将 `BASE_URL` 改为管理网页的 HTTPS 域名，并在现有反向代理设置 TLS 和到服务端 8088 的转发。HTTPS `BASE_URL` 会启用 Secure 会话 Cookie；保持 HTTP 时这些 Cookie 不要求 HTTPS。无需 DNS 参与设备局域网访问。`BASE_URL` 只用于显示管理地址和配置 Cookie，不重写设备 API 路径。
 

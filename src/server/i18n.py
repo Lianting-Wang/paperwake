@@ -35,6 +35,15 @@ ENGLISH = {
     '最多六行，空白行不会显示在屏幕上。': 'Up to six rows. Empty rows stay off the screen.',
     '维护选项': 'MAINTENANCE', '调试说明': 'About remote debug',
     '实时预览': 'LIVE PREVIEW', '屏幕上的样子': 'On your screen',
+    '屏幕预览加载失败，请重试。': 'The screen preview could not load. Please try again.',
+    '请使用显示范围内的英文、数字和 ASCII 符号。': 'Use English, numbers and ASCII within the display limits.',
+    '正在更新预览…': 'Updating preview…', '电子纸屏幕预览': 'E-paper screen preview',
+    '设备原生布局与字体': 'Device layout & bitmap fonts', '查看原尺寸': 'Open full size',
+    'TIME 与 BATTERY 使用最近一次设备报告；这不是屏幕实时截图。':
+        'TIME and BATTERY use the latest device report. This is a layout preview, not a live screen capture.',
+    '预览仅支持显示范围内的英文、数字和可打印 ASCII 符号。':
+        'Preview text must use English, numbers and printable ASCII within the display limits.',
+    '屏幕预览暂不可用，请稍后重试。': 'The screen preview is temporarily unavailable. Please try again later.',
     '预览随输入更新；保存后将在设备下次报到时生效。':
         'The preview follows your edits. Saved changes arrive at the next check-in.',
     '内容与唤醒计划独立保存，可放心调整。': 'Content and wake schedules are saved separately.',

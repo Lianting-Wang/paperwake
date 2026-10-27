@@ -24,11 +24,15 @@ server 无法通过关机意图证明实际断电；实际关机请求结果在�
 | `config/*.json` | 显式选定后部署到 `/etc/pisched/config.json` |
 | `deploy/systemd/pisched.service` | `/etc/systemd/system/pisched.service` |
 | `build/display/epd` | 默认 `/home/wlt/IT8951/epd` |
+| `src/display/IT8951/singlepage/page_render.c` | 设备和网页共用的无硬件绘图逻辑，配合 `lib/Fonts/` 位图字库 |
+| `build/display/libpage-preview.so` | 管理服务所在主机架构的预览库；不包含 GPIO/SPI 驱动 |
 | `src/server/` | Flask + Gunicorn + SQLite 管理服务，见 [服务指南](server.md) |
 
 设备 token 位于配置的独立文件，不进入配置环境、日志或 Git。发布包不含 token，安装时单独写入并限制为 root 可读。
 
 采集任务通过环境读取已校验配置、事件 ID、页面、HTTP 耗时和父进程本轮实际任务期限。显示进程消费相同一份电池样本，并通过 `PISCHED_PAGE_TITLE`、`PISCHED_PAGE_STATUS`、`PISCHED_PAGE_LABEL_1..6`、`PISCHED_PAGE_VALUE_1..6` 读取内容。C 在硬件初始化/清屏之前验证 ASCII 与长度；内容无效不刷新。
+
+`singlepage/page.c` 收集设备时钟、电量和内容后调用 `Page_Render`，随后交给硬件刷新。网页通过 `src/server/preview.py` 调用同一绘图函数，并把 4 bpp 帧缓冲转换为灰度 PNG；预览使用面向阅读者的方向，不应用传输给实体屏幕时的镜像。设备端现有版式不变，字体、坐标、灰阶、40 字符值换行和页脚无需维护第二份实现。预览库按绘图源码和字库校验版本，旧构建会拒绝加载；Waveshare Paint 的全局状态由进程内锁保护。
 
 ## 留机与兜底
 

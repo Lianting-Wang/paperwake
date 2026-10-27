@@ -33,7 +33,7 @@ build/                      编译产物和待审阅发布包，只保存在本�
 
 ## 本地开始
 
-完整离线检查需要 Python 3.10 以上、Bash、Make 及服务端依赖，不需要连接树莓派：
+完整离线检查需要 Python 3.10 以上、Bash、Make、C 编译器及服务端依赖，不需要连接树莓派：
 
 ```sh
 python3 -m venv .venv
@@ -74,7 +74,7 @@ make release CONFIG=config/local.json
 - [采样数据说明](data/samples/README.md)
 - [第三方源码说明](THIRD_PARTY.md)
 
-改界面优先看 `src/display/IT8951/singlepage/page.c`；改初始化和刷新流程看 `singlepage/main.c`；改唤醒流程看 `src/scheduler/pisched.py`。
+改电子纸版式优先看 `src/display/IT8951/singlepage/page_render.c`，网页屏幕预览也直接使用该文件及相同位图字库。修改后同时构建设备程序与管理服务；本机运行管理服务前执行 `make build-preview`。`singlepage/page.c` 负责读取设备内容、时钟、电量并提交刷新；初始化流程见 `singlepage/main.c`，唤醒流程见 `src/scheduler/pisched.py`。
 
 ## Git 范围
 

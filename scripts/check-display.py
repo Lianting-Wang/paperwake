@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory() as folder:
     for name in ('paint','driver'):
         sources=[root/f'tests/display/{name}_probe.c']
         if name=='paint':
-            sources += [base/'singlepage/page.c',base/'lib/GUI/GUI_Paint.c',*sorted((base/'lib/Fonts').glob('*.c'))]
+            sources += [base/'singlepage/page.c',base/'singlepage/page_render.c',base/'lib/GUI/GUI_Paint.c',*sorted((base/'lib/Fonts').glob('*.c'))]
         target=Path(folder)/name
         subprocess.run(common+[str(p) for p in sources]+['-lm','-o',str(target)],check=True)
         subprocess.run([str(target)],check=True,timeout=10,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0'))

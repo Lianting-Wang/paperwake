@@ -2,12 +2,13 @@ PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 CONFIG ?= config/local.json
 HOST ?= pi
 
-.PHONY: help check check-display preview snapshot image build-display release
+.PHONY: help check check-display build-preview preview snapshot image build-display release
 
 help:
 	@printf '%s\n' \
 	  'make check                         Local validation and offline tests' \
 	  'make check-display                 ASan/UBSan C probes (requires a C compiler)' \
+	  'make build-preview                 Build the shared screen renderer for this host' \
 	  'make preview CONFIG=path.json       Preview future schedule, no hardware access' \
 	  'make snapshot HOST=pi              Read-only device backup (ignored by Git)' \
 	  'make image                         Build Debian 13 ARM64 compiler image' \
@@ -19,6 +20,9 @@ check:
 
 check-display:
 	$(PYTHON) scripts/check-display.py
+
+build-preview:
+	$(PYTHON) src/server/preview.py --build build/display/libpage-preview.so
 
 preview:
 	$(PYTHON) scripts/preview-schedule.py --config "$(CONFIG)"

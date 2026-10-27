@@ -51,6 +51,7 @@ make release CONFIG=config/local.json
 ```
 
 - 修改 Python、Shell、配置或维护工具后执行 `make check`。
+- 电子纸与网页屏幕预览共用 `src/display/IT8951/singlepage/page_render.c` 和位图字库。后续布局、灰阶、字体与换行调整必须修改这份绘图实现，不另写网页模拟版式；同时执行 `make build-preview`、`make check-display`、ARM64 构建，并重建管理服务镜像，保证线上预览随设备风格一起更新。
 - 改时间计算时覆盖跨天、恰好到点和白天计划跨夜的边界，并用 preview 检查选定配置。
 - 改 C 显示代码、驱动或构建环境后执行 ARM64 构建；构建产物位于 `build/display/`。
 - 发布包必须显式选择配置。`make release` 只准备本地文件，不代表已部署。

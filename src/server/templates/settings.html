@@ -37,10 +37,10 @@
       <div class="editor-save-bar"><p>{{ t('修改将在设备下次报到时生效。') }}</p><div class="actions"><a href="{{ url_for('dashboard') }}">{{ t('取消') }}</a><button type="submit" class="primary">{{ t('保存设置') }} <span aria-hidden="true">↗</span></button></div></div>
     </form>
     <aside class="editor-preview">
-      <section class="panel management-card preview-card"><div class="card-heading"><div><p class="eyebrow">{{ t('实时预览') }}</p><h2>{{ t('屏幕上的样子') }}</h2></div><span class="card-symbol">{{ icon('screen') }}</span></div><div class="screen-stage">{{ screen_preview(display, device.content_version) }}</div><p class="card-footnote">{{ t('预览随输入更新；保存后将在设备下次报到时生效。') }}</p></section>
+      <section class="panel management-card preview-card"><div class="card-heading"><div><p class="eyebrow">{{ t('实时预览') }}</p><h2>{{ t('屏幕上的样子') }}</h2></div><span class="card-symbol">{{ icon('screen') }}</span></div><div class="screen-stage">{{ screen_preview(device.device_id) }}</div><p class="card-footnote">{{ t('预览随输入更新；保存后将在设备下次报到时生效。') }}</p><p class="card-footnote preview-context-note">{{ t('TIME 与 BATTERY 使用最近一次设备报告；这不是屏幕实时截图。') }}</p></section>
       <div class="quiet-note"><span>{{ icon('check') }}</span><p>{{ t('内容与唤醒计划独立保存，可放心调整。') }}</p></div>
     </aside>
   </div>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='content-preview.js', v=asset_version('content-preview.js')) }}" defer></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='screen-preview.js', v=asset_version('screen-preview.js')) }}" defer></script>{% endblock %}
